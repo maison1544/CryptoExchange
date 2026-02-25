@@ -1,0 +1,14 @@
+{
+  "name": "cryptoexchange",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev:user": "pnpm --filter user dev",
+    "build:user": "pnpm --filter user build",
+    "start:user": "pnpm --filter user start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
