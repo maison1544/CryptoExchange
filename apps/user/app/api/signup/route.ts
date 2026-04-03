@@ -66,6 +66,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Check phone number duplicate
+    const { data: existingPhone } = await supabaseAdmin
+      .from("user_profiles")
+      .select("id")
+      .eq("phone", normalizedPhone)
+      .maybeSingle();
+
+    if (existingPhone) {
+      return NextResponse.json(
+        { error: "이미 가입된 전화번호입니다." },
+        { status: 409 },
+      );
+    }
+
     // Validate referral code if provided
     let agentId: string | null = null;
     if (normalizedJoinCode) {

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AdminPageHeader } from "@/components/admin/ui/AdminPageHeader";
 import { AdminTabs } from "@/components/admin/ui/AdminTabs";
@@ -18,7 +18,7 @@ const TABS = [
   { id: "logs", label: "활동 로그" },
 ];
 
-export default function MembersPage() {
+function MembersInner() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -57,5 +57,13 @@ export default function MembersPage() {
         {activeTab === "logs" && <MemberLogsTab />}
       </div>
     </div>
+  );
+}
+
+export default function MembersPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-400">로딩 중...</div>}>
+      <MembersInner />
+    </Suspense>
   );
 }

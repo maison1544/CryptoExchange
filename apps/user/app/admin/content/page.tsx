@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AdminPageHeader } from "@/components/admin/ui/AdminPageHeader";
 import { AdminTabs } from "@/components/admin/ui/AdminTabs";
@@ -14,7 +14,7 @@ const TABS = [
   { id: "popup", label: "팝업 관리" },
 ];
 
-export default function ContentPage() {
+function ContentInner() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -51,5 +51,13 @@ export default function ContentPage() {
         {activeTab === "popup" && <PopupManagementTab />}
       </div>
     </div>
+  );
+}
+
+export default function ContentPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-400">로딩 중...</div>}>
+      <ContentInner />
+    </Suspense>
   );
 }

@@ -12,6 +12,8 @@ import {
   Lock,
   Phone,
   Loader2,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { useNotification } from "@/contexts/NotificationContext";
 import { signUp } from "@/lib/api/auth";
@@ -46,6 +48,10 @@ export default function SignupPage() {
   const [agreed, setAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [emailChecked, setEmailChecked] = useState<boolean | null>(null);
+  const [emailChecking, setEmailChecking] = useState(false);
+  const [phoneChecked, setPhoneChecked] = useState<boolean | null>(null);
+  const [phoneChecking, setPhoneChecking] = useState(false);
   const [form, setForm] = useState({
     email: "",
     password: "",
@@ -63,6 +69,7 @@ export default function SignupPage() {
   ) => {
     const { name, value } = e.target;
     setForm({ ...form, [name]: value });
+    if (name === "email") setEmailChecked(null);
     if (fieldErrors[name])
       setFieldErrors((prev) => {
         const n = { ...prev };
@@ -80,6 +87,7 @@ export default function SignupPage() {
     else
       formatted = `${value.slice(0, 3)}-${value.slice(3, 7)}-${value.slice(7, 11)}`;
     setForm({ ...form, phone: formatted });
+    setPhoneChecked(null);
     if (fieldErrors.phone)
       setFieldErrors((prev) => {
         const n = { ...prev };
@@ -88,14 +96,86 @@ export default function SignupPage() {
       });
   };
 
+  const checkEmailDuplicate = async () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      setFieldErrors((p) => ({
+        ...p,
+        email: "올바른 이메일 형식을 입력해주세요.",
+      }));
+      return;
+    }
+    setEmailChecking(true);
+    try {
+      const res = await fetch("/api/signup/check-duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "email", value: form.email.trim() }),
+      });
+      const data = await res.json();
+      if (data.duplicate) {
+        setEmailChecked(false);
+        setFieldErrors((p) => ({ ...p, email: data.message }));
+      } else {
+        setEmailChecked(true);
+        setFieldErrors((p) => {
+          const n = { ...p };
+          delete n.email;
+          return n;
+        });
+      }
+    } catch {
+      setFieldErrors((p) => ({ ...p, email: "중복 확인에 실패했습니다." }));
+    } finally {
+      setEmailChecking(false);
+    }
+  };
+
+  const checkPhoneDuplicate = async () => {
+    if (!/^010-\d{4}-\d{4}$/.test(form.phone)) {
+      setFieldErrors((p) => ({
+        ...p,
+        phone: "전화번호는 010-1234-5678 형식으로 입력해주세요.",
+      }));
+      return;
+    }
+    setPhoneChecking(true);
+    try {
+      const res = await fetch("/api/signup/check-duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "phone", value: form.phone }),
+      });
+      const data = await res.json();
+      if (data.duplicate) {
+        setPhoneChecked(false);
+        setFieldErrors((p) => ({ ...p, phone: data.message }));
+      } else {
+        setPhoneChecked(true);
+        setFieldErrors((p) => {
+          const n = { ...p };
+          delete n.phone;
+          return n;
+        });
+      }
+    } catch {
+      setFieldErrors((p) => ({ ...p, phone: "중복 확인에 실패했습니다." }));
+    } finally {
+      setPhoneChecking(false);
+    }
+  };
+
   const validateAll = () => {
     const errors: Record<string, string> = {};
     if (!/^[가-힣]{2,10}$|^[a-zA-Z\s]{2,20}$/.test(form.name.trim()))
       errors.name = "이름은 한글 2-10자 또는 영문 2-20자로 입력해주세요.";
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
       errors.email = "올바른 이메일 형식을 입력해주세요.";
+    else if (emailChecked !== true)
+      errors.email = "이메일 중복 확인을 해주세요.";
     if (!/^010-\d{4}-\d{4}$/.test(form.phone))
       errors.phone = "전화번호는 010-1234-5678 형식으로 입력해주세요.";
+    else if (phoneChecked !== true)
+      errors.phone = "전화번호 중복 확인을 해주세요.";
     if (form.password.length < 6)
       errors.password = "비밀번호는 6자 이상이어야 합니다.";
     if (form.password !== form.passwordConfirm)
@@ -204,24 +284,46 @@ export default function SignupPage() {
                 <label className="text-gray-400 text-sm mb-2 block">
                   이메일
                 </label>
-                <div className="relative">
-                  <Mail
-                    size={18}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                  />
-                  <input
-                    name="email"
-                    type="email"
-                    required
-                    value={form.email}
-                    onChange={handleChange}
-                    placeholder="example@email.com"
-                    className={`w-full bg-[#0d1117] border rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none transition-colors ${fieldErrors.email ? "border-red-500" : "border-gray-700 focus:border-yellow-500"}`}
-                  />
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Mail
+                      size={18}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                    />
+                    <input
+                      name="email"
+                      type="email"
+                      required
+                      value={form.email}
+                      onChange={handleChange}
+                      placeholder="example@email.com"
+                      className={`w-full bg-[#0d1117] border rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none transition-colors ${fieldErrors.email ? "border-red-500" : emailChecked === true ? "border-green-500" : "border-gray-700 focus:border-yellow-500"}`}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={checkEmailDuplicate}
+                    disabled={emailChecking || !form.email.trim()}
+                    className="shrink-0 px-3 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-white rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    {emailChecking ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : emailChecked === true ? (
+                      <CheckCircle2 size={14} className="text-green-400" />
+                    ) : emailChecked === false ? (
+                      <XCircle size={14} className="text-red-400" />
+                    ) : null}
+                    중복확인
+                  </button>
                 </div>
                 {fieldErrors.email && (
                   <p className="text-red-400 text-xs mt-1.5">
                     {fieldErrors.email}
+                  </p>
+                )}
+                {emailChecked === true && !fieldErrors.email && (
+                  <p className="text-green-400 text-xs mt-1.5">
+                    사용 가능한 이메일입니다.
                   </p>
                 )}
               </div>
@@ -231,24 +333,46 @@ export default function SignupPage() {
                 <label className="text-gray-400 text-sm mb-2 block">
                   전화번호
                 </label>
-                <div className="relative">
-                  <Phone
-                    size={18}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                  />
-                  <input
-                    name="phone"
-                    type="tel"
-                    required
-                    value={form.phone}
-                    onChange={handlePhoneChange}
-                    placeholder="010-1234-5678"
-                    className={`w-full bg-[#0d1117] border rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none transition-colors ${fieldErrors.phone ? "border-red-500" : "border-gray-700 focus:border-yellow-500"}`}
-                  />
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Phone
+                      size={18}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                    />
+                    <input
+                      name="phone"
+                      type="tel"
+                      required
+                      value={form.phone}
+                      onChange={handlePhoneChange}
+                      placeholder="010-1234-5678"
+                      className={`w-full bg-[#0d1117] border rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none transition-colors ${fieldErrors.phone ? "border-red-500" : phoneChecked === true ? "border-green-500" : "border-gray-700 focus:border-yellow-500"}`}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={checkPhoneDuplicate}
+                    disabled={phoneChecking || !form.phone.trim()}
+                    className="shrink-0 px-3 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-white rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    {phoneChecking ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : phoneChecked === true ? (
+                      <CheckCircle2 size={14} className="text-green-400" />
+                    ) : phoneChecked === false ? (
+                      <XCircle size={14} className="text-red-400" />
+                    ) : null}
+                    중복확인
+                  </button>
                 </div>
                 {fieldErrors.phone && (
                   <p className="text-red-400 text-xs mt-1.5">
                     {fieldErrors.phone}
+                  </p>
+                )}
+                {phoneChecked === true && !fieldErrors.phone && (
+                  <p className="text-green-400 text-xs mt-1.5">
+                    사용 가능한 전화번호입니다.
                   </p>
                 )}
               </div>

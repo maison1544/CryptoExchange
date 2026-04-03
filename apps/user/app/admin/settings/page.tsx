@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AdminPageHeader } from "@/components/admin/ui/AdminPageHeader";
 import { AdminTabs } from "@/components/admin/ui/AdminTabs";
@@ -14,7 +14,7 @@ const TABS = [
   { id: "symbols", label: "코인 관리" },
 ];
 
-export default function SettingsPage() {
+function SettingsContent() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -51,5 +51,13 @@ export default function SettingsPage() {
         {activeTab === "symbols" && <CoinSymbolsTab />}
       </div>
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-400">로딩 중...</div>}>
+      <SettingsContent />
+    </Suspense>
   );
 }

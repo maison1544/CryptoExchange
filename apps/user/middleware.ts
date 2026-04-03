@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   "/admin/login",
   "/partner/login",
   "/",
+  "/trade",
 ];
 
 export async function middleware(request: NextRequest) {

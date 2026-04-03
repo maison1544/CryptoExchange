@@ -12,6 +12,7 @@ import { useBinanceWebSocket } from "@/hooks/useBinanceWebSocket";
 import type { Position } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 
 const supabase = createClient();
 
@@ -120,27 +121,49 @@ export default function TradePage() {
               />
             </div>
             <div className="w-full lg:w-[300px] h-full overflow-hidden">
-              <OrderPanel
-                currentPrice={currentPrice}
-                orderPrice={null}
-                symbol={currentSymbol}
-                ticker={ticker}
-                onAddPosition={handleAddPosition}
-              />
+              {user ? (
+                <OrderPanel
+                  currentPrice={currentPrice}
+                  orderPrice={null}
+                  symbol={currentSymbol}
+                  ticker={ticker}
+                  onAddPosition={handleAddPosition}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full gap-4 p-6 text-center">
+                  <p className="text-gray-400 text-sm">
+                    주문하려면 로그인이 필요합니다
+                  </p>
+                  <Link
+                    href="/login"
+                    className="px-6 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-lg text-sm transition-colors"
+                  >
+                    로그인
+                  </Link>
+                  <Link
+                    href="/signup"
+                    className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    계정이 없으신가요? 회원가입
+                  </Link>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Bottom Section: Positions */}
-        <div className="min-h-[256px] shrink-0 border-t border-gray-800">
-          <PositionTabs
-            positions={positions}
-            currentPrice={currentPrice}
-            currentMarkPrice={currentMarkPrice}
-            currentSymbol={currentSymbol}
-            onRemovePosition={handleRemovePosition}
-          />
-        </div>
+        {/* Bottom Section: Positions - only shown when logged in */}
+        {user && (
+          <div className="min-h-[256px] shrink-0 border-t border-gray-800">
+            <PositionTabs
+              positions={positions}
+              currentPrice={currentPrice}
+              currentMarkPrice={currentMarkPrice}
+              currentSymbol={currentSymbol}
+              onRemovePosition={handleRemovePosition}
+            />
+          </div>
+        )}
 
         {/* Market List Overlay */}
         {showMarketList && (

@@ -1,9 +1,6 @@
 import type { NextConfig } from "next";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { withSentryConfig } from "@sentry/nextjs";
-
-const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   /* config options here */
@@ -17,7 +14,7 @@ const nextConfig: NextConfig = {
     ],
   },
   turbopack: {
-    root: projectRoot,
+    root: path.resolve(process.cwd(), "../.."),
   },
   async headers() {
     return [
@@ -60,5 +57,4 @@ const nextConfig: NextConfig = {
 
 export default withSentryConfig(nextConfig, {
   silent: true,
-  disableLogger: true,
 });
