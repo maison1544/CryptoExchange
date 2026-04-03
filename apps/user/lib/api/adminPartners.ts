@@ -110,6 +110,7 @@ export async function updateAdminPartner(
 export async function adjustAdminPartnerBalance(
   partnerId: string,
   signedAmount: number,
+  reason?: string,
 ) {
   return adminPartnersRequest<{ success: true; balanceAdjustment: number }>(
     "POST",
@@ -117,6 +118,7 @@ export async function adjustAdminPartnerBalance(
       action: "adjust-balance" satisfies AdminPartnerAction,
       partnerId,
       signedAmount,
+      reason,
     },
   );
 }

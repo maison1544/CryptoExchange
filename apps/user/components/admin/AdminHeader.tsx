@@ -65,7 +65,7 @@ export function AdminHeader() {
                 <div className="hidden min-w-0 text-sm md:block">
                   <div className="font-medium text-white">관리자</div>
                   <div className="truncate text-xs text-gray-500">
-                    {user?.email?.split("@")[0] ?? "admin"}
+                    {user?.email ?? "admin"}
                   </div>
                 </div>
               </div>

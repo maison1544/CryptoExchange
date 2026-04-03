@@ -248,7 +248,7 @@ async function loadMembers(): Promise<MemberRow[]> {
 }
 
 export function MemberListTab() {
-  const { isInitialized, role } = useAuth();
+  const { isInitialized, role, user } = useAuth();
   const { addToast } = useNotification();
   const [mockMembers, setMockMembers] = useState<MemberRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -2287,10 +2287,12 @@ export function MemberListTab() {
                   )
                     return;
                   const finalAmt = balanceAdjust.type === "add" ? amt : -amt;
+                  const adminEmail = user?.email ?? "unknown";
+                  const reason = `[${adminEmail}] ${adjustMemo || "admin_adjustment"}`;
                   await supabase.rpc("adjust_user_balance", {
                     p_user_id: selectedMember.visibleId,
                     p_amount: finalAmt,
-                    p_reason: adjustMemo || "admin_adjustment",
+                    p_reason: reason,
                   });
                   setBalanceAdjust(null);
                   await refreshMembers();

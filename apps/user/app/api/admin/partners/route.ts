@@ -67,6 +67,7 @@ type PostBody =
       action?: "adjust-balance";
       partnerId?: string;
       signedAmount?: number;
+      reason?: string;
     };
 
 function getBearer(req: NextRequest) {

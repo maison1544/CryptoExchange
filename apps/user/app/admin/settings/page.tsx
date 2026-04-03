@@ -7,11 +7,13 @@ import { AdminTabs } from "@/components/admin/ui/AdminTabs";
 import { CoinSymbolsTab } from "./components/CoinSymbolsTab";
 import { SiteSettingsTab } from "./components/SiteSettingsTab";
 import { FeeSettingsTab } from "./components/FeeSettingsTab";
+import { AdminAccountsTab } from "./components/AdminAccountsTab";
 
 const TABS = [
   { id: "site", label: "사이트 기본 설정" },
   { id: "fee", label: "수수료 및 출금 설정" },
   { id: "symbols", label: "코인 관리" },
+  { id: "admins", label: "관리자 계정" },
 ];
 
 function SettingsContent() {
@@ -49,6 +51,7 @@ function SettingsContent() {
         {activeTab === "site" && <SiteSettingsTab />}
         {activeTab === "fee" && <FeeSettingsTab />}
         {activeTab === "symbols" && <CoinSymbolsTab />}
+        {activeTab === "admins" && <AdminAccountsTab />}
       </div>
     </div>
   );

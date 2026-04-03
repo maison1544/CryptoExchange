@@ -27,25 +27,61 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const { type, value } = body as { type?: string; value?: string };
+  const { type, value, scope } = body as {
+    type?: string;
+    value?: string;
+    scope?: string;
+  };
   const trimmed = String(value || "").trim();
 
   if (!type || !trimmed) {
     return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
   }
 
+  const checkAll = scope === "all";
+
   if (type === "email") {
-    const { data: profile } = await supabaseAdmin
+    const emailLower = trimmed.toLowerCase();
+
+    const { data: userProfile } = await supabaseAdmin
       .from("user_profiles")
       .select("id")
-      .eq("email", trimmed.toLowerCase())
+      .eq("email", emailLower)
       .maybeSingle();
 
-    if (profile) {
+    if (userProfile) {
       return NextResponse.json({
         duplicate: true,
-        message: "이미 가입된 이메일입니다.",
+        message: "이미 가입된 이메일입니다. (유저)",
       });
+    }
+
+    if (checkAll) {
+      const { data: agent } = await supabaseAdmin
+        .from("agents")
+        .select("id")
+        .eq("email", emailLower)
+        .maybeSingle();
+
+      if (agent) {
+        return NextResponse.json({
+          duplicate: true,
+          message: "이미 사용 중인 이메일입니다. (파트너)",
+        });
+      }
+
+      const { data: admin } = await supabaseAdmin
+        .from("admins")
+        .select("id")
+        .eq("email", emailLower)
+        .maybeSingle();
+
+      if (admin) {
+        return NextResponse.json({
+          duplicate: true,
+          message: "이미 사용 중인 이메일입니다. (관리자)",
+        });
+      }
     }
 
     return NextResponse.json({
@@ -66,6 +102,21 @@ export async function POST(req: NextRequest) {
         duplicate: true,
         message: "이미 가입된 전화번호입니다.",
       });
+    }
+
+    if (checkAll) {
+      const { data: agent } = await supabaseAdmin
+        .from("agents")
+        .select("id")
+        .eq("phone", trimmed)
+        .maybeSingle();
+
+      if (agent) {
+        return NextResponse.json({
+          duplicate: true,
+          message: "이미 사용 중인 전화번호입니다. (파트너)",
+        });
+      }
     }
 
     return NextResponse.json({

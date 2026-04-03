@@ -68,6 +68,9 @@ type AdminPendingSnapshot = {
   deposits: number;
   withdrawals: number;
   registrations: number;
+  depositIds: Set<number>;
+  withdrawalIds: Set<number>;
+  registrationIds: Set<string>;
 };
 
 const DEFAULT_SETTINGS: NotificationSettings = {
@@ -393,24 +396,55 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       const [depositRes, withdrawalRes, registrationRes] = await Promise.all([
         supabase
           .from("deposits")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "pending"),
+          .select("id, amount, depositor_name, user_id")
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(50),
         supabase
           .from("withdrawals")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "pending"),
+          .select(
+            "id, amount, account_holder, user_id, agent_id, withdrawal_type",
+          )
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(50),
         supabase
           .from("user_profiles")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "pending_approval"),
+          .select("id, email, name")
+          .eq("status", "pending_approval")
+          .order("created_at", { ascending: false })
+          .limit(50),
       ]);
 
       if (cancelled) return;
 
+      const depRows = (depositRes.data ?? []) as {
+        id: number;
+        amount: number | string | null;
+        depositor_name: string | null;
+        user_id: string | null;
+      }[];
+      const wdRows = (withdrawalRes.data ?? []) as {
+        id: number;
+        amount: number | string | null;
+        account_holder: string | null;
+        user_id: string | null;
+        agent_id: string | null;
+        withdrawal_type: string | null;
+      }[];
+      const regRows = (registrationRes.data ?? []) as {
+        id: string;
+        email: string | null;
+        name: string | null;
+      }[];
+
       const snapshot: AdminPendingSnapshot = {
-        deposits: depositRes.count ?? 0,
-        withdrawals: withdrawalRes.count ?? 0,
-        registrations: registrationRes.count ?? 0,
+        deposits: depRows.length,
+        withdrawals: wdRows.length,
+        registrations: regRows.length,
+        depositIds: new Set(depRows.map((d) => d.id)),
+        withdrawalIds: new Set(wdRows.map((w) => w.id)),
+        registrationIds: new Set(regRows.map((r) => r.id)),
       };
 
       if (!adminSnapshotRef.current) {
@@ -418,37 +452,50 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (
-        settings.depositWithdrawEnabled &&
-        snapshot.deposits > adminSnapshotRef.current.deposits
-      ) {
-        addToast({
-          title: "새 입금 요청",
-          message: `대기 중인 입금 요청이 ${snapshot.deposits - adminSnapshotRef.current.deposits}건 추가되었습니다.`,
-          type: "info",
-        });
+      const prevSnap = adminSnapshotRef.current;
+
+      if (settings.depositWithdrawEnabled) {
+        const newDeposits = depRows.filter(
+          (d) => !prevSnap.depositIds.has(d.id),
+        );
+        for (const dep of newDeposits) {
+          const amt = Number(dep.amount || 0).toLocaleString();
+          const name = dep.depositor_name || "알 수 없음";
+          addToast({
+            title: "새 입금 요청",
+            message: `${name}님이 ${amt} USDT 입금을 요청했습니다.`,
+            type: "info",
+          });
+        }
+
+        const newWithdrawals = wdRows.filter(
+          (w) => !prevSnap.withdrawalIds.has(w.id),
+        );
+        for (const wd of newWithdrawals) {
+          const amt = Number(wd.amount || 0).toLocaleString();
+          const isAgent = wd.withdrawal_type === "agent";
+          const label = isAgent ? "파트너" : "유저";
+          const name = wd.account_holder || "알 수 없음";
+          addToast({
+            title: "새 출금 요청",
+            message: `[${label}] ${name}님이 ${amt} USDT 출금을 요청했습니다.`,
+            type: "info",
+          });
+        }
       }
 
-      if (
-        settings.depositWithdrawEnabled &&
-        snapshot.withdrawals > adminSnapshotRef.current.withdrawals
-      ) {
-        addToast({
-          title: "새 출금 요청",
-          message: `대기 중인 출금 요청이 ${snapshot.withdrawals - adminSnapshotRef.current.withdrawals}건 추가되었습니다.`,
-          type: "info",
-        });
-      }
-
-      if (
-        settings.registrationEnabled &&
-        snapshot.registrations > adminSnapshotRef.current.registrations
-      ) {
-        addToast({
-          title: "새 가입 승인 요청",
-          message: `승인 대기 회원이 ${snapshot.registrations - adminSnapshotRef.current.registrations}명 추가되었습니다.`,
-          type: "info",
-        });
+      if (settings.registrationEnabled) {
+        const newRegs = regRows.filter(
+          (r) => !prevSnap.registrationIds.has(r.id),
+        );
+        for (const reg of newRegs) {
+          const display = reg.email || reg.name || "알 수 없음";
+          addToast({
+            title: "새 가입 승인 요청",
+            message: `${display}님이 회원 가입 승인을 요청했습니다.`,
+            type: "info",
+          });
+        }
       }
 
       adminSnapshotRef.current = snapshot;

@@ -32,6 +32,10 @@ import {
   prefetchMemberDetail,
 } from "@/components/admin/ui/MemberDetailModal";
 import { PartnerMemberList } from "@/components/admin/ui/PartnerMemberList";
+import {
+  DuplicateCheckButton,
+  DuplicateCheckMessage,
+} from "@/components/ui/DuplicateCheckButton";
 import { Search, Users, ChevronDown, ChevronUp } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
@@ -52,7 +56,7 @@ type PartnerRow = AdminPartnerRow;
 type PartnerMemberRow = AdminPartnerMemberRow;
 
 export function PartnerListTab() {
-  const { isInitialized, role } = useAuth();
+  const { isInitialized, role, user } = useAuth();
   const { addToast } = useNotification();
   const hasLoadedPartnersRef = useRef(false);
   const [partners, setPartners] = useState<PartnerRow[]>([]);
@@ -91,8 +95,23 @@ export function PartnerListTab() {
     lossCommissionRate: "15",
     commissionRate: "0.5",
     feeCommissionRate: "30",
+    bankName: "",
+    bankAccount: "",
+    bankAccountHolder: "",
     memo: "",
   });
+  const [partnerEmailChecked, setPartnerEmailChecked] = useState<
+    boolean | null
+  >(null);
+  const [partnerEmailError, setPartnerEmailError] = useState<string | null>(
+    null,
+  );
+  const [partnerPhoneChecked, setPartnerPhoneChecked] = useState<
+    boolean | null
+  >(null);
+  const [partnerPhoneError, setPartnerPhoneError] = useState<string | null>(
+    null,
+  );
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
   const totalPartnerMembers = partners.reduce((s, p) => s + p.memberCount, 0);
   const totalPartnerBalance = partners.reduce((s, p) => s + p.balance, 0);
@@ -212,8 +231,15 @@ export function PartnerListTab() {
       lossCommissionRate: "15",
       commissionRate: "0.5",
       feeCommissionRate: "30",
+      bankName: "",
+      bankAccount: "",
+      bankAccountHolder: "",
       memo: "",
     });
+    setPartnerEmailChecked(null);
+    setPartnerEmailError(null);
+    setPartnerPhoneChecked(null);
+    setPartnerPhoneError(null);
   }, []);
 
   const handleCreatePartner = useCallback(async () => {
@@ -228,6 +254,14 @@ export function PartnerListTab() {
       addToast({
         title: "입력값 확인",
         message: "아이디, 비밀번호, 이름, 이메일을 모두 입력해주세요.",
+        type: "error",
+      });
+      return;
+    }
+    if (partnerEmailChecked !== true) {
+      addToast({
+        title: "중복확인 필요",
+        message: "이메일 중복확인을 먼저 진행해주세요.",
         type: "error",
       });
       return;
@@ -272,6 +306,7 @@ export function PartnerListTab() {
     addToast,
     isCreatingPartner,
     newPartnerForm,
+    partnerEmailChecked,
     refreshPartners,
     resetNewPartnerForm,
   ]);
@@ -1017,26 +1052,92 @@ export function PartnerListTab() {
             </div>
             <div>
               <label className="block text-xs text-gray-300 mb-1">연락처</label>
-              <AdminInput
-                placeholder="010-0000-0000"
-                className="w-full"
-                value={newPartnerForm.phone}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  handleNewPartnerFormChange("phone", e.target.value)
-                }
+              <div className="flex gap-2">
+                <AdminInput
+                  placeholder="010-0000-0000"
+                  className="flex-1"
+                  value={newPartnerForm.phone}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    handleNewPartnerFormChange("phone", e.target.value);
+                    setPartnerPhoneChecked(null);
+                    setPartnerPhoneError(null);
+                  }}
+                />
+                <DuplicateCheckButton
+                  type="phone"
+                  value={newPartnerForm.phone}
+                  scope="all"
+                  variant="admin"
+                  validate={(v) =>
+                    v.replace(/[^0-9]/g, "").length >= 10
+                      ? null
+                      : "올바른 연락처를 입력해주세요."
+                  }
+                  onResult={(r) => {
+                    if (r.duplicate) {
+                      setPartnerPhoneChecked(false);
+                      setPartnerPhoneError(r.message);
+                    } else if (r.checked) {
+                      setPartnerPhoneChecked(true);
+                      setPartnerPhoneError(null);
+                    } else {
+                      setPartnerPhoneChecked(false);
+                      setPartnerPhoneError(r.message);
+                    }
+                  }}
+                />
+              </div>
+              <DuplicateCheckMessage
+                checked={partnerPhoneChecked}
+                duplicate={partnerPhoneChecked === false && !!partnerPhoneError}
+                error={partnerPhoneError ?? undefined}
+                successMessage="사용 가능한 연락처입니다."
               />
             </div>
             <div>
               <label className="block text-xs text-gray-300 mb-1">
                 이메일 *
               </label>
-              <AdminInput
-                placeholder="example@email.com"
-                className="w-full"
-                value={newPartnerForm.email}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  handleNewPartnerFormChange("email", e.target.value)
-                }
+              <div className="flex gap-2">
+                <AdminInput
+                  placeholder="example@email.com"
+                  className="flex-1"
+                  value={newPartnerForm.email}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    handleNewPartnerFormChange("email", e.target.value);
+                    setPartnerEmailChecked(null);
+                    setPartnerEmailError(null);
+                  }}
+                />
+                <DuplicateCheckButton
+                  type="email"
+                  value={newPartnerForm.email}
+                  scope="all"
+                  variant="admin"
+                  validate={(v) =>
+                    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
+                      ? null
+                      : "올바른 이메일 형식을 입력해주세요."
+                  }
+                  onResult={(r) => {
+                    if (r.duplicate) {
+                      setPartnerEmailChecked(false);
+                      setPartnerEmailError(r.message);
+                    } else if (r.checked) {
+                      setPartnerEmailChecked(true);
+                      setPartnerEmailError(null);
+                    } else {
+                      setPartnerEmailChecked(false);
+                      setPartnerEmailError(r.message);
+                    }
+                  }}
+                />
+              </div>
+              <DuplicateCheckMessage
+                checked={partnerEmailChecked}
+                duplicate={partnerEmailChecked === false && !!partnerEmailError}
+                error={partnerEmailError ?? undefined}
+                successMessage="사용 가능한 이메일입니다."
               />
             </div>
             <div>
@@ -1113,6 +1214,57 @@ export function PartnerListTab() {
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                     handleNewPartnerFormChange(
                       "feeCommissionRate",
+                      e.target.value,
+                    )
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 출금 계좌 정보 */}
+          <div>
+            <h4 className="text-sm font-medium text-white mb-3">
+              출금 계좌 정보
+            </h4>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-gray-300 mb-1">
+                  출금 은행
+                </label>
+                <AdminInput
+                  placeholder="은행명"
+                  className="w-full"
+                  value={newPartnerForm.bankName}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleNewPartnerFormChange("bankName", e.target.value)
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-300 mb-1">
+                  출금 계좌번호
+                </label>
+                <AdminInput
+                  placeholder="계좌번호 입력"
+                  className="w-full"
+                  value={newPartnerForm.bankAccount}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleNewPartnerFormChange("bankAccount", e.target.value)
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-300 mb-1">
+                  예금주
+                </label>
+                <AdminInput
+                  placeholder="예금주 입력"
+                  className="w-full"
+                  value={newPartnerForm.bankAccountHolder}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleNewPartnerFormChange(
+                      "bankAccountHolder",
                       e.target.value,
                     )
                   }
@@ -1252,9 +1404,11 @@ export function PartnerListTab() {
                       return;
                     }
                     try {
+                      const adminEmail = user?.email ?? "unknown";
                       await adjustAdminPartnerBalance(
                         selectedPartner.visibleId,
                         signedAmount,
+                        `[${adminEmail}] ${partnerAdjustMemo || "admin_adjustment"}`,
                       );
                     } catch (error) {
                       addToast({
