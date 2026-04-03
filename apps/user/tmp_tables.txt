@@ -1,0 +1,1 @@
+﻿[{"tablename":"admins"},{"tablename":"agent_commissions"},{"tablename":"agents"},{"tablename":"deposits"},{"tablename":"futures_positions"},{"tablename":"notices"},{"tablename":"popups"},{"tablename":"staking_positions"},{"tablename":"staking_products"},{"tablename":"support_messages"},{"tablename":"support_tickets"},{"tablename":"user_profiles"},{"tablename":"withdrawals"}]

@@ -1,0 +1,1 @@
+﻿[{"column_name":"id"},{"column_name":"user_id"},{"column_name":"product_id"},{"column_name":"amount"},{"column_name":"daily_reward"},{"column_name":"total_earned"},{"column_name":"status"},{"column_name":"cancel_reason"},{"column_name":"started_at"},{"column_name":"ends_at"},{"column_name":"completed_at"}]

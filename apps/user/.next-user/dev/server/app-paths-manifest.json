@@ -1,0 +1,4 @@
+{
+  "/api/wallet/summary/route": "app/api/wallet/summary/route.js",
+  "/page": "app/page.js"
+}

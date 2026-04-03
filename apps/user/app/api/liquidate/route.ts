@@ -1,0 +1,154 @@
+import { createClient } from "@supabase/supabase-js";
+import { NextRequest, NextResponse } from "next/server";
+import { normalizeCommissionRate } from "@/lib/utils/commission";
+
+export async function POST(req: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    return NextResponse.json({ error: "Server config error" }, { status: 500 });
+  }
+
+  const authHeader = req.headers.get("authorization");
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : "";
+
+  if (!token) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Parse body before auth
+  const body = await req.json().catch(() => null);
+  const positionId = Number(body?.positionId);
+
+  if (!Number.isFinite(positionId) || positionId <= 0) {
+    return NextResponse.json({ error: "positionId required" }, { status: 400 });
+  }
+
+  const authClient = createClient(supabaseUrl, anonKey);
+  const admin = createClient(supabaseUrl, serviceRoleKey);
+
+  try {
+    // ── Stage 1: auth ──
+    const {
+      data: { user },
+      error: authError,
+    } = await authClient.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // ── Stage 2: position + profile in parallel (1 RTT) ──
+    const posSelect =
+      "id, user_id, symbol, direction, margin_mode, margin, liquidation_price, status";
+    const [posResult, profileResult] = await Promise.all([
+      admin
+        .from("futures_positions")
+        .select(posSelect)
+        .eq("id", positionId)
+        .eq("user_id", user.id)
+        .eq("status", "open")
+        .maybeSingle(),
+      admin
+        .from("user_profiles")
+        .select("agent_id")
+        .eq("id", user.id)
+        .maybeSingle(),
+    ]);
+
+    const pos = posResult.data;
+    if (posResult.error || !pos) {
+      return NextResponse.json(
+        { error: "Position not found or already closed" },
+        { status: 404 },
+      );
+    }
+
+    // ── Stage 3: update position (with optimistic lock) ──
+    const pnl = -Number(pos.margin);
+
+    const { data: liquidatedRow, error: updateError } = await admin
+      .from("futures_positions")
+      .update({
+        status: "liquidated",
+        exit_price: pos.liquidation_price,
+        pnl,
+        closed_at: new Date().toISOString(),
+      })
+      .eq("id", positionId)
+      .eq("user_id", user.id)
+      .eq("status", "open")
+      .select("id")
+      .maybeSingle();
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    if (!liquidatedRow) {
+      return NextResponse.json(
+        { error: "Position already closed or liquidated" },
+        { status: 409 },
+      );
+    }
+
+    // ── Stage 4: commission (non-blocking) ──
+    let commissionWarning: string | undefined;
+    const profile = profileResult.data;
+
+    if (profile?.agent_id) {
+      try {
+        const { data: agent } = await admin
+          .from("agents")
+          .select("id, loss_commission_rate")
+          .eq("id", profile.agent_id)
+          .maybeSingle();
+
+        if (agent) {
+          const lossCommissionAmount = Number(
+            (
+              Math.max(0, -pnl) *
+              normalizeCommissionRate(agent.loss_commission_rate, 0)
+            ).toFixed(4),
+          );
+
+          if (lossCommissionAmount > 0) {
+            const { error: commissionError } = await admin
+              .from("agent_commissions")
+              .insert({
+                agent_id: agent.id,
+                user_id: user.id,
+                source_type: "loss",
+                source_id: positionId,
+                amount: lossCommissionAmount,
+              });
+            if (commissionError) {
+              commissionWarning = commissionError.message;
+            }
+          }
+        }
+      } catch {
+        commissionWarning = "Commission recording failed";
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      positionId,
+      marginMode: pos.margin_mode === "isolated" ? "isolated" : "cross",
+      exitPrice: pos.liquidation_price,
+      pnl,
+      commissionWarning,
+      message: `Position #${positionId} liquidated. Margin ${Number(pos.margin).toFixed(2)} USDT lost.`,
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Unknown error" },
+      { status: 500 },
+    );
+  }
+}
