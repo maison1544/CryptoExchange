@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev:user": "pnpm --filter user dev",
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\dev-all.ps1",
+    "dev:all": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\dev-all.ps1",
+    "dev:single": "pnpm --filter user dev",
+    "dev:user": "pnpm --filter user dev:user",
+    "dev:admin": "pnpm --filter user dev:admin",
+    "dev:partner": "pnpm --filter user dev:partner",
     "build:user": "pnpm --filter user build",
     "start:user": "pnpm --filter user start"
   },

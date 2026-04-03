@@ -25,6 +25,9 @@ coverage/
 *.pem
 Thumbs.db
 
+# dev logs
+.dev-logs/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
