@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     if (userProfile) {
       return NextResponse.json({
         duplicate: true,
-        message: "이미 가입된 이메일입니다. (유저)",
+        message: "이미 가입된 이메일입니다.",
       });
     }
 
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
       if (agent) {
         return NextResponse.json({
           duplicate: true,
-          message: "이미 사용 중인 이메일입니다. (파트너)",
+          message: "이미 사용 중인 이메일입니다.",
         });
       }
 
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
       if (admin) {
         return NextResponse.json({
           duplicate: true,
-          message: "이미 사용 중인 이메일입니다. (관리자)",
+          message: "이미 사용 중인 이메일입니다.",
         });
       }
     }
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
       if (agent) {
         return NextResponse.json({
           duplicate: true,
-          message: "이미 사용 중인 전화번호입니다. (파트너)",
+          message: "이미 사용 중인 전화번호입니다.",
         });
       }
     }
