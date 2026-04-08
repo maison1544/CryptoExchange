@@ -6,6 +6,7 @@ import {
 } from "@/lib/server/siteSettings";
 import { normalizeCommissionRate } from "@/lib/utils/commission";
 import { rateLimit } from "@/lib/rateLimit";
+import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
 async function getCurrentPrice(symbol: string) {
   const response = await fetch(
@@ -234,6 +235,22 @@ export async function POST(req: NextRequest) {
         }
       } catch {
         commissionWarning = "Commission recording failed";
+      }
+    }
+
+    // ── Stage 6: Recalculate cross liquidation prices for remaining positions ──
+    if (position.margin_mode !== "isolated") {
+      const { data: updatedProfile } = await admin
+        .from("user_profiles")
+        .select("futures_balance")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (updatedProfile) {
+        await recalculateCrossLiquidationPrices(
+          admin,
+          user.id,
+          Number(updatedProfile.futures_balance ?? 0),
+        ).catch(() => {});
       }
     }
 

@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeCommissionRate } from "@/lib/utils/commission";
 import { rateLimit } from "@/lib/rateLimit";
+import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
 export async function POST(req: NextRequest) {
   const ip =
@@ -144,6 +145,22 @@ export async function POST(req: NextRequest) {
         }
       } catch {
         commissionWarning = "Commission recording failed";
+      }
+    }
+
+    // ── Stage 5: Recalculate cross liquidation prices for remaining positions ──
+    if (pos.margin_mode !== "isolated") {
+      const { data: updatedProfile } = await admin
+        .from("user_profiles")
+        .select("futures_balance")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (updatedProfile) {
+        await recalculateCrossLiquidationPrices(
+          admin,
+          user.id,
+          Number(updatedProfile.futures_balance ?? 0),
+        ).catch(() => {});
       }
     }
 

@@ -371,6 +371,7 @@ export function OrderPanel({
           marginRatio:
             userBalance > 0 ? (positionMargin / userBalance) * 100 : 0,
           margin: positionMargin,
+          fee: Number(inserted.fee ?? 0),
           pnl: 0,
           pnlPercent: 0,
           leverage: Number(inserted.leverage),

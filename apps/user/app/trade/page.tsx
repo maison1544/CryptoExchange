@@ -52,6 +52,7 @@ export default function TradePage() {
         liqPrice: Number(p.liquidation_price),
         marginRatio: 0,
         margin: Number(p.margin),
+        fee: Number(p.fee ?? 0),
         pnl: 0,
         pnlPercent: 0,
         leverage: Number(p.leverage),

@@ -12,6 +12,8 @@ import { resolveFuturesFeeRate } from "@/lib/utils/siteSettings";
 import { formatDisplayNumber, formatUsdt } from "@/lib/utils/numberFormat";
 import {
   computeCrossMarginAccountMetrics,
+  getBinanceStyleWalletBalance,
+  getEstimatedCrossLiquidationPrice,
   type OpenPositionForRisk,
 } from "@/lib/utils/futuresRisk";
 import type { Position } from "@/types";
@@ -212,6 +214,45 @@ export function PositionTabs({
 
     return computeCrossMarginAccountMetrics(walletBalance, riskPositions);
   }, [positions, walletBalance, currentMarkPrice, currentPrice, currentSymbol]);
+
+  // Dynamically compute cross liquidation prices using current account equity
+  const crossLiqPriceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const crossPositions = positions.filter(
+      (pos) => pos.marginMode !== "isolated",
+    );
+
+    if (crossPositions.length === 0 || walletBalance <= 0) {
+      return map;
+    }
+
+    const totalCrossMargins = crossPositions.reduce(
+      (sum, p) => sum + (p.margin || 0),
+      0,
+    );
+    const totalCrossFees = crossPositions.reduce(
+      (sum, p) => sum + (p.fee || 0),
+      0,
+    );
+    const binanceWB = getBinanceStyleWalletBalance(
+      walletBalance,
+      totalCrossMargins,
+      totalCrossFees,
+    );
+    const accountEquity = binanceWB - totalCrossFees;
+
+    for (const pos of crossPositions) {
+      const liqPrice = getEstimatedCrossLiquidationPrice({
+        accountEquity,
+        direction: pos.type === "롱" ? "long" : "short",
+        entryPrice: pos.entryPrice,
+        size: pos.size,
+      });
+      map.set(pos.id, liqPrice);
+    }
+
+    return map;
+  }, [positions, walletBalance]);
 
   // Poll for backend-triggered liquidations: check if positions were closed
   useEffect(() => {
@@ -642,7 +683,11 @@ export function PositionTabs({
                           {formatTradePrice(markPrice)}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap align-top text-yellow-500">
-                          {formatTradePrice(pos.liqPrice)}
+                          {formatTradePrice(
+                            pos.marginMode === "cross"
+                              ? (crossLiqPriceMap.get(pos.id) ?? pos.liqPrice)
+                              : pos.liqPrice,
+                          )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap align-top text-gray-300">
                           {formatUsdt(pos.margin, {

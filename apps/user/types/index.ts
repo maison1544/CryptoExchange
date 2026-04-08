@@ -18,6 +18,7 @@ export type Position = {
   liqPrice: number;
   marginRatio: number;
   margin: number;
+  fee: number;
   pnl: number;
   pnlPercent: number;
   leverage: number;

@@ -31,6 +31,7 @@ import {
   type FuturesMarginMode,
   type OpenPositionForRisk,
 } from "@/lib/utils/futuresRisk";
+import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
 // ─── Configuration ──────────────────────────────────────
 const SUPABASE_URL =
@@ -587,6 +588,22 @@ async function executePendingLimitOrders(
         margin,
         fee,
       });
+
+      // Recalculate cross liquidation prices for all user positions
+      if (marginMode === "cross") {
+        const newFuturesBalance =
+          futuresBalance - Number(order.reserved_amount || 0);
+        await recalculateCrossLiquidationPrices(
+          supabase,
+          order.user_id,
+          newFuturesBalance,
+        ).catch((err) => {
+          console.error(
+            `[Worker] Failed to recalculate cross liq prices for user=${order.user_id}:`,
+            err,
+          );
+        });
+      }
 
       log(
         `[Worker] ✅ FILLED LIMIT order=${order.id} user=${order.user_id} symbol=${order.symbol} position=${insertedPosition.id}`,

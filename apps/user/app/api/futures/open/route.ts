@@ -14,6 +14,7 @@ import {
   type OpenPositionForRisk,
 } from "@/lib/utils/futuresRisk";
 import { rateLimit } from "@/lib/rateLimit";
+import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
 function isInsufficientBalanceError(message: string | null | undefined) {
   if (!message) return false;
@@ -411,6 +412,16 @@ export async function POST(req: NextRequest) {
       } catch {
         commissionWarning = "Commission recording failed";
       }
+    }
+
+    // ── Stage 4: Recalculate cross liquidation prices for all positions ──
+    if (marginMode === "cross") {
+      const newFuturesBalance = futuresBalance - totalDeduction;
+      await recalculateCrossLiquidationPrices(
+        admin,
+        user.id,
+        newFuturesBalance,
+      ).catch(() => {});
     }
 
     return NextResponse.json({

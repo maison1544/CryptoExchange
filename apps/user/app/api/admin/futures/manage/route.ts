@@ -6,6 +6,7 @@ import {
   resolveFuturesFeeRate,
 } from "@/lib/server/siteSettings";
 import { rateLimit } from "@/lib/rateLimit";
+import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
 async function getCurrentPrice(symbol: string) {
   const response = await fetch(
@@ -348,6 +349,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Recalculate cross liquidation prices for remaining positions
+      if (position.margin_mode !== "isolated") {
+        const { data: updatedProfile } = await supabaseAdmin
+          .from("user_profiles")
+          .select("futures_balance")
+          .eq("id", position.user_id)
+          .maybeSingle();
+        if (updatedProfile) {
+          await recalculateCrossLiquidationPrices(
+            supabaseAdmin,
+            position.user_id,
+            Number(updatedProfile.futures_balance ?? 0),
+          ).catch(() => {});
+        }
+      }
+
       return NextResponse.json({
         success: true,
         action,
@@ -431,6 +448,22 @@ export async function POST(req: NextRequest) {
         },
         { status: 500 },
       );
+    }
+
+    // Recalculate cross liquidation prices after refund
+    if (position.margin_mode !== "isolated") {
+      const { data: updatedProfile } = await supabaseAdmin
+        .from("user_profiles")
+        .select("futures_balance")
+        .eq("id", position.user_id)
+        .maybeSingle();
+      if (updatedProfile) {
+        await recalculateCrossLiquidationPrices(
+          supabaseAdmin,
+          position.user_id,
+          Number(updatedProfile.futures_balance ?? 0),
+        ).catch(() => {});
+      }
     }
 
     return NextResponse.json({
