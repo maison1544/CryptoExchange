@@ -1,12 +1,23 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { getClientIp } from "@/lib/server/clientIp";
+import { rateLimit } from "@/lib/rateLimit";
 
 type RecordLoginBody = {
   accountType?: "user" | "backoffice";
 };
 
 export async function POST(req: NextRequest) {
+  const clientIp =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rl = rateLimit(`record-login:${clientIp}`, 10, 60_000);
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+      { status: 429 },
+    );
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -45,7 +56,7 @@ export async function POST(req: NextRequest) {
 
   const userId = user.id;
   const now = new Date().toISOString();
-  const ip = getClientIp(req.headers);
+  const resolvedIp = getClientIp(req.headers);
   const userAgent = req.headers.get("user-agent") ?? "-";
 
   if (accountType === "user") {
@@ -59,7 +70,7 @@ export async function POST(req: NextRequest) {
       supabaseAdmin.from("login_logs").insert({
         user_id: userId,
         login_at: now,
-        ip_address: ip || "-",
+        ip_address: resolvedIp || "-",
         user_agent: userAgent,
         success: true,
       }),
@@ -89,14 +100,14 @@ export async function POST(req: NextRequest) {
 
     const updateData: Record<string, string | boolean | null> = {
       last_login_at: now,
-      last_login_ip: ip,
+      last_login_ip: resolvedIp,
       is_online: true,
       last_activity: now,
       updated_at: now,
     };
 
-    if (!profile.join_ip && ip) {
-      updateData.join_ip = ip;
+    if (!profile.join_ip && resolvedIp) {
+      updateData.join_ip = resolvedIp;
     }
 
     const { error: updateError } = await supabaseAdmin
@@ -108,7 +119,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: updateError.message }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, ip });
+    return NextResponse.json({ success: true, ip: resolvedIp });
   }
 
   // Backoffice: admin + agent check in parallel (1 RTT)
@@ -122,7 +133,7 @@ export async function POST(req: NextRequest) {
       .from("admins")
       .update({
         last_login_at: now,
-        last_login_ip: ip,
+        last_login_ip: resolvedIp,
         updated_at: now,
       })
       .eq("id", userId);
@@ -134,7 +145,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, accountType: "admin", ip });
+    return NextResponse.json({
+      success: true,
+      accountType: "admin",
+      ip: resolvedIp,
+    });
   }
 
   if (agentResult.data) {
@@ -142,7 +157,7 @@ export async function POST(req: NextRequest) {
       .from("agents")
       .update({
         last_login_at: now,
-        last_login_ip: ip,
+        last_login_ip: resolvedIp,
         updated_at: now,
       })
       .eq("id", userId);
@@ -154,7 +169,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, accountType: "agent", ip });
+    return NextResponse.json({
+      success: true,
+      accountType: "agent",
+      ip: resolvedIp,
+    });
   }
 
   return NextResponse.json({ error: "Account not found" }, { status: 404 });

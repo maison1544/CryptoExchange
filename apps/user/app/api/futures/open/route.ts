@@ -13,6 +13,7 @@ import {
   type FuturesMarginMode,
   type OpenPositionForRisk,
 } from "@/lib/utils/futuresRisk";
+import { rateLimit } from "@/lib/rateLimit";
 
 function isInsufficientBalanceError(message: string | null | undefined) {
   if (!message) return false;
@@ -47,6 +48,16 @@ function parseOrderType(value: unknown): "market" | "limit" {
 }
 
 export async function POST(req: NextRequest) {
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rl = rateLimit(`futures-open:${ip}`, 30, 60_000);
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+      { status: 429 },
+    );
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

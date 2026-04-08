@@ -59,6 +59,15 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return NextResponse.json(
+        { error: "유효하지 않은 이메일 형식입니다." },
+        { status: 400 },
+      );
+    }
+
     if (password.length < 6) {
       return NextResponse.json(
         { error: "비밀번호는 6자 이상이어야 합니다." },

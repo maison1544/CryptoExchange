@@ -5,7 +5,7 @@ import { rateLimit } from "@/lib/rateLimit";
 export async function POST(req: NextRequest) {
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const rl = rateLimit(`check-dup:${ip}`, 20, 60_000);
+  const rl = rateLimit(`check-dup:${ip}`, 10, 60_000);
   if (!rl.success) {
     return NextResponse.json(
       { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },

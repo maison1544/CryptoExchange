@@ -5,6 +5,7 @@ import {
   getSiteSettings,
   resolveFuturesFeeRate,
 } from "@/lib/server/siteSettings";
+import { rateLimit } from "@/lib/rateLimit";
 
 async function getCurrentPrice(symbol: string) {
   const response = await fetch(
@@ -51,6 +52,16 @@ function normalizeTimestampValue(value?: string | null) {
 }
 
 export async function POST(req: NextRequest) {
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rl = rateLimit(`admin-futures:${ip}`, 20, 60_000);
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+      { status: 429 },
+    );
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 

@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { rateLimit } from "@/lib/rateLimit";
 
 type DepositBody = {
   amount?: number;
@@ -34,9 +35,7 @@ function isUuid(value: string) {
 }
 
 function createRequestHash(payload: Record<string, unknown>) {
-  return createHash("sha256")
-    .update(JSON.stringify(payload))
-    .digest("hex");
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 function responseFromStored(record: IdempotencyRecord) {
@@ -46,6 +45,16 @@ function responseFromStored(record: IdempotencyRecord) {
 }
 
 export async function POST(req: NextRequest) {
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const rl = rateLimit(`deposit:${ip}`, 10, 60_000);
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+      { status: 429 },
+    );
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -63,11 +72,17 @@ export async function POST(req: NextRequest) {
   const depositorName = String(body?.depositorName ?? "").trim();
 
   if (!Number.isFinite(amount) || amount <= 0) {
-    return NextResponse.json({ error: "Invalid deposit amount" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid deposit amount" },
+      { status: 400 },
+    );
   }
 
   if (!depositorName) {
-    return NextResponse.json({ error: "Depositor name required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Depositor name required" },
+      { status: 400 },
+    );
   }
 
   const idempotencyKey = getIdempotencyKey(req);
@@ -118,12 +133,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const insertResult = await supabaseAdmin.from("api_idempotency_keys").insert({
-      user_id: user.id,
-      route_key: routeKey,
-      idempotency_key: idempotencyKey,
-      request_hash: requestHash,
-    });
+    const insertResult = await supabaseAdmin
+      .from("api_idempotency_keys")
+      .insert({
+        user_id: user.id,
+        route_key: routeKey,
+        idempotency_key: idempotencyKey,
+        request_hash: requestHash,
+      });
 
     if (insertResult.error) {
       const duplicateResult = await supabaseAdmin
@@ -152,7 +169,10 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      return NextResponse.json({ error: insertResult.error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: insertResult.error.message },
+        { status: 500 },
+      );
     }
 
     const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(

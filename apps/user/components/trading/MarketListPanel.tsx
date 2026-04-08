@@ -5,13 +5,31 @@ import Image from "next/image";
 import { Search, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDisplayNumber } from "@/lib/utils/numberFormat";
+import { createClient } from "@/lib/supabase/client";
+import { loadSiteSettings, parseJsonSetting } from "@/lib/utils/siteSettings";
+
+const supabase = createClient();
+const ADMIN_COIN_SETTINGS_KEY = "admin_coin_symbols";
 
 const COIN_ICONS: Record<string, string> = {
-  BTCUSDT: "https://assets.coingecko.com/coins/images/1/small/bitcoin.png",
-  ETHUSDT: "https://assets.coingecko.com/coins/images/279/small/ethereum.png",
-  BNBUSDT:
-    "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png",
-  SOLUSDT: "https://assets.coingecko.com/coins/images/4128/small/solana.png",
+  BTCUSDT: "https://img.icons8.com/color/96/bitcoin--v3.png",
+  ETHUSDT: "https://img.icons8.com/color/96/ethereum.png",
+  BNBUSDT: "https://img.icons8.com/dusk/96/binance.png",
+  XRPUSDT: "https://img.icons8.com/color/96/xrp.png",
+  SOLUSDT: "https://img.icons8.com/nolan/96/solana.png",
+  TRXUSDT: "https://img.icons8.com/cotton/96/tron.png",
+  DOGEUSDT: "https://img.icons8.com/liquid-glass-color/96/dogecoin.png",
+  ADAUSDT: "https://img.icons8.com/fluent/96/cardano.png",
+  LINKUSDT: "https://img.icons8.com/cotton/96/chainlink.png",
+  AVAXUSDT: "https://img.icons8.com/color/96/avalanche.png",
+};
+
+type AdminCoinConfig = {
+  symbol: string;
+  name: string;
+  active: boolean;
+  maxLeverage: number;
+  sortOrder: number;
 };
 
 const FAVORITES_STORAGE_KEY = "trade.favoriteMarkets";
@@ -23,16 +41,6 @@ type LiveMarket = {
   priceChangePercent: number;
   volume24h: number;
   fundingRate: number;
-};
-
-type BinanceExchangeInfo = {
-  symbols?: Array<{
-    symbol: string;
-    status: string;
-    contractType: string;
-    quoteAsset: string;
-    baseAsset: string;
-  }>;
 };
 
 type Binance24hTicker = {
@@ -118,10 +126,10 @@ export function MarketListPanel({
           setError("");
         }
 
-        const [exchangeInfoRes, tickerRes, premiumRes] = await Promise.all([
-          fetch("https://fapi.binance.com/fapi/v1/exchangeInfo", {
-            cache: "no-store",
-          }),
+        const [adminSettings, tickerRes, premiumRes] = await Promise.all([
+          loadSiteSettings(supabase, [ADMIN_COIN_SETTINGS_KEY]).catch(
+            () => ({}) as Record<string, string>,
+          ),
           fetch("https://fapi.binance.com/fapi/v1/ticker/24hr", {
             cache: "no-store",
           }),
@@ -130,26 +138,25 @@ export function MarketListPanel({
           }),
         ]);
 
-        if (!exchangeInfoRes.ok || !tickerRes.ok || !premiumRes.ok) {
+        if (!tickerRes.ok || !premiumRes.ok) {
           throw new Error("마켓 데이터를 불러오지 못했습니다.");
         }
 
-        const exchangeInfo =
-          (await exchangeInfoRes.json()) as BinanceExchangeInfo;
+        const adminCoins = parseJsonSetting<AdminCoinConfig[]>(
+          adminSettings[ADMIN_COIN_SETTINGS_KEY],
+          [],
+        );
+
+        const activeSymbolMap = new Map<string, AdminCoinConfig>();
+        adminCoins.forEach((coin) => {
+          if (coin.active !== false) {
+            activeSymbolMap.set(coin.symbol, coin);
+          }
+        });
+
         const tickers = (await tickerRes.json()) as Binance24hTicker[];
         const premiumIndexes =
           (await premiumRes.json()) as BinancePremiumIndex[];
-
-        const allowedSymbols = new Map(
-          (exchangeInfo.symbols ?? [])
-            .filter(
-              (item) =>
-                item.quoteAsset === "USDT" &&
-                item.contractType === "PERPETUAL" &&
-                item.status === "TRADING",
-            )
-            .map((item) => [item.symbol, item.baseAsset]),
-        );
 
         const fundingRateMap = new Map(
           premiumIndexes.map((item) => [
@@ -159,19 +166,20 @@ export function MarketListPanel({
         );
 
         const nextMarkets = tickers
-          .filter((item) => allowedSymbols.has(item.symbol))
-          .map((item) => ({
-            symbol: item.symbol,
-            name:
-              allowedSymbols.get(item.symbol) ??
-              item.symbol.replace("USDT", ""),
-            lastPrice: Number(item.lastPrice) || 0,
-            priceChangePercent: Number(item.priceChangePercent) || 0,
-            volume24h: Number(item.quoteVolume) || 0,
-            fundingRate: fundingRateMap.get(item.symbol) ?? 0,
-          }))
-          .sort((a, b) => b.volume24h - a.volume24h)
-          .slice(0, 150);
+          .filter((item) => activeSymbolMap.has(item.symbol))
+          .map((item) => {
+            const adminCoin = activeSymbolMap.get(item.symbol)!;
+            return {
+              symbol: item.symbol,
+              name: adminCoin.name || item.symbol.replace("USDT", ""),
+              lastPrice: Number(item.lastPrice) || 0,
+              priceChangePercent: Number(item.priceChangePercent) || 0,
+              volume24h: Number(item.quoteVolume) || 0,
+              fundingRate: fundingRateMap.get(item.symbol) ?? 0,
+              sortOrder: adminCoin.sortOrder ?? 999,
+            };
+          })
+          .sort((a, b) => a.sortOrder - b.sortOrder);
 
         if (!cancelled) {
           setMarkets(nextMarkets);
