@@ -67,7 +67,7 @@ export function useBinanceKline({
     try {
       const encodedSymbol = encodeURIComponent(symbol);
       const res = await fetch(
-        `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodedSymbol}&interval=${interval}&limit=1500`,
+        `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodedSymbol}&interval=${interval}&limit=500`,
         { cache: "no-store" },
       );
       if (!res.ok) return;

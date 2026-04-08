@@ -282,7 +282,7 @@ export function BinanceKlineChart({
     });
 
     if (chart) {
-      chart.createIndicator("VOL", false, { id: "candle_pane" });
+      chart.createIndicator("VOL", false, { height: 80 });
       chartRef.current = chart;
     }
 
@@ -299,7 +299,11 @@ export function BinanceKlineChart({
     const chart = chartRef.current;
     if (!chart || historicalBars.length === 0) return;
 
-    chart.applyNewData(historicalBars);
+    chart.applyNewData(historicalBars, true);
+    requestAnimationFrame(() => {
+      chart.setBarSpace(12);
+      chart.scrollToRealTime();
+    });
     prevBarsLenRef.current = historicalBars.length;
   }, [historicalBars]);
 
