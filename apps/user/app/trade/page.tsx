@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { PanelLeftClose } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { MarketListPanel } from "@/components/trading/MarketListPanel";
-import { ChartPlaceholder } from "@/components/trading/ChartPlaceholder";
+import { BinanceKlineChart } from "@/components/trading/BinanceKlineChart";
 import { OrderBook } from "@/components/trading/OrderBook";
 import { OrderPanel } from "@/components/trading/OrderPanel";
 import { PositionTabs } from "@/components/trading/PositionTabs";
@@ -100,7 +100,7 @@ export default function TradePage() {
         <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
           {/* Middle: Chart */}
           <div className="flex-1 min-w-[400px] border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col relative">
-            <ChartPlaceholder
+            <BinanceKlineChart
               ticker={ticker}
               markPrice={markPrice}
               symbol={currentSymbol}
