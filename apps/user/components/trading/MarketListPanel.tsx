@@ -142,10 +142,20 @@ export function MarketListPanel({
           throw new Error("마켓 데이터를 불러오지 못했습니다.");
         }
 
-        const adminCoins = parseJsonSetting<AdminCoinConfig[]>(
+        let adminCoins = parseJsonSetting<AdminCoinConfig[]>(
           adminSettings[ADMIN_COIN_SETTINGS_KEY],
           [],
         );
+
+        if (adminCoins.length === 0) {
+          adminCoins = Object.keys(COIN_ICONS).map((symbol, idx) => ({
+            symbol,
+            name: symbol.replace("USDT", ""),
+            active: true,
+            maxLeverage: 75,
+            sortOrder: idx + 1,
+          }));
+        }
 
         const activeSymbolMap = new Map<string, AdminCoinConfig>();
         adminCoins.forEach((coin) => {
