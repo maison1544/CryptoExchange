@@ -416,12 +416,21 @@ export async function POST(req: NextRequest) {
 
     // ── Stage 4: Recalculate cross liquidation prices for all positions ──
     if (marginMode === "cross") {
-      const newFuturesBalance = futuresBalance - totalDeduction;
-      await recalculateCrossLiquidationPrices(
-        admin,
-        user.id,
-        newFuturesBalance,
-      ).catch(() => {});
+      try {
+        // Re-read the actual balance after deduction to avoid stale data
+        const { data: freshProfile } = await admin
+          .from("user_profiles")
+          .select("futures_balance")
+          .eq("id", user.id)
+          .maybeSingle();
+        const freshBalance = Number(freshProfile?.futures_balance ?? 0);
+        await recalculateCrossLiquidationPrices(admin, user.id, freshBalance);
+      } catch (recalcErr) {
+        console.error(
+          "[futures/open] Failed to recalculate cross liq prices:",
+          recalcErr,
+        );
+      }
     }
 
     return NextResponse.json({

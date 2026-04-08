@@ -390,6 +390,10 @@ export function PositionTabs({
         },
         body: JSON.stringify({
           positionId: Number(closeModal.id),
+          exitPrice:
+            closeModal.symbol === currentSymbol && currentPrice
+              ? currentPrice
+              : closeModal.markPrice,
         }),
       });
 
@@ -419,7 +423,14 @@ export function PositionTabs({
     } finally {
       setClosing(false);
     }
-  }, [addToast, closeModal, loadTradeHistory, onRemovePosition]);
+  }, [
+    addToast,
+    closeModal,
+    currentPrice,
+    currentSymbol,
+    loadTradeHistory,
+    onRemovePosition,
+  ]);
 
   const handleCancelOrder = useCallback(
     async (order: PendingOrderItem) => {

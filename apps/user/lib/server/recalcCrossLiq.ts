@@ -40,7 +40,12 @@ export async function recalculateCrossLiquidationPrices(
     .eq("status", "open")
     .neq("margin_mode", "isolated");
 
-  if (error || !crossPositions || crossPositions.length === 0) {
+  if (error) {
+    console.error("[recalcCrossLiq] Query error:", error.message);
+    return;
+  }
+
+  if (!crossPositions || crossPositions.length === 0) {
     return;
   }
 

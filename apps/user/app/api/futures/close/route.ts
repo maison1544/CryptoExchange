@@ -8,24 +8,47 @@ import { normalizeCommissionRate } from "@/lib/utils/commission";
 import { rateLimit } from "@/lib/rateLimit";
 import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
-async function getCurrentPrice(symbol: string) {
-  const response = await fetch(
-    `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
-    { cache: "no-store" },
-  );
+async function getCurrentPrice(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  symbol: string,
+  clientPrice?: number,
+): Promise<number> {
+  // 1) Try mark_prices table (updated every 1s by liquidation worker)
+  const { data: markRow } = await admin
+    .from("mark_prices")
+    .select("mark_price")
+    .eq("symbol", symbol)
+    .maybeSingle();
 
-  if (!response.ok) {
-    throw new Error("Failed to fetch market price");
+  const dbPrice = Number(markRow?.mark_price);
+  if (Number.isFinite(dbPrice) && dbPrice > 0) {
+    return dbPrice;
   }
 
-  const payload = (await response.json()) as { price?: string };
-  const price = Number(payload.price);
-
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error("Invalid market price");
+  // 2) Fallback: Binance REST API
+  try {
+    const response = await fetch(
+      `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(5000) },
+    );
+    if (response.ok) {
+      const payload = (await response.json()) as { price?: string };
+      const restPrice = Number(payload.price);
+      if (Number.isFinite(restPrice) && restPrice > 0) {
+        return restPrice;
+      }
+    }
+  } catch {
+    // Binance unreachable from this region, continue to client fallback
   }
 
-  return price;
+  // 3) Fallback: client-supplied price
+  if (Number.isFinite(clientPrice) && clientPrice! > 0) {
+    return clientPrice!;
+  }
+
+  throw new Error("현재 시세를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.");
 }
 
 export async function POST(req: NextRequest) {
@@ -105,9 +128,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Stage 3: price fetch (external API, can't combine with DB) ──
+    // ── Stage 3: price fetch (DB mark_prices → Binance REST → client fallback) ──
     const feeRate = resolveFuturesFeeRate(settings);
-    const exitPrice = await getCurrentPrice(position.symbol);
+    const clientExitPrice = Number(body?.exitPrice);
+    const exitPrice = await getCurrentPrice(
+      admin,
+      position.symbol,
+      clientExitPrice,
+    );
     const size = Number(position.size);
     const entryPrice = Number(position.entry_price);
     const margin = Number(position.margin);
@@ -240,17 +268,24 @@ export async function POST(req: NextRequest) {
 
     // ── Stage 6: Recalculate cross liquidation prices for remaining positions ──
     if (position.margin_mode !== "isolated") {
-      const { data: updatedProfile } = await admin
-        .from("user_profiles")
-        .select("futures_balance")
-        .eq("id", user.id)
-        .maybeSingle();
-      if (updatedProfile) {
-        await recalculateCrossLiquidationPrices(
-          admin,
-          user.id,
-          Number(updatedProfile.futures_balance ?? 0),
-        ).catch(() => {});
+      try {
+        const { data: updatedProfile } = await admin
+          .from("user_profiles")
+          .select("futures_balance")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (updatedProfile) {
+          await recalculateCrossLiquidationPrices(
+            admin,
+            user.id,
+            Number(updatedProfile.futures_balance ?? 0),
+          );
+        }
+      } catch (recalcErr) {
+        console.error(
+          "[futures/close] Failed to recalculate cross liq prices:",
+          recalcErr,
+        );
       }
     }
 

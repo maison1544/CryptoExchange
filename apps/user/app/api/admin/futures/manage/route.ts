@@ -8,17 +8,33 @@ import {
 import { rateLimit } from "@/lib/rateLimit";
 import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
 
-async function getCurrentPrice(symbol: string) {
-  const response = await fetch(
-    `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
-    { cache: "no-store" },
-  );
-  if (!response.ok) throw new Error("Failed to fetch market price");
-  const payload = (await response.json()) as { price?: string };
-  const price = Number(payload.price);
-  if (!Number.isFinite(price) || price <= 0)
-    throw new Error("Invalid market price");
-  return price;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getCurrentPrice(admin: any, symbol: string): Promise<number> {
+  // 1) mark_prices table (updated every 1s by liquidation worker)
+  const { data: markRow } = await admin
+    .from("mark_prices")
+    .select("mark_price")
+    .eq("symbol", symbol)
+    .maybeSingle();
+  const dbPrice = Number(markRow?.mark_price);
+  if (Number.isFinite(dbPrice) && dbPrice > 0) return dbPrice;
+
+  // 2) Binance REST fallback
+  try {
+    const response = await fetch(
+      `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(5000) },
+    );
+    if (response.ok) {
+      const payload = (await response.json()) as { price?: string };
+      const restPrice = Number(payload.price);
+      if (Number.isFinite(restPrice) && restPrice > 0) return restPrice;
+    }
+  } catch {
+    // Binance unreachable
+  }
+
+  throw new Error("Failed to fetch market price");
 }
 
 type ManageAction = "force-liquidate" | "refund-trade";
@@ -228,7 +244,7 @@ export async function POST(req: NextRequest) {
         "futures_fee",
       ]);
       const feeRate = resolveFuturesFeeRate(settings);
-      const exitPrice = await getCurrentPrice(position.symbol);
+      const exitPrice = await getCurrentPrice(supabaseAdmin, position.symbol);
       const size = Number(position.size);
       const entryPrice = Number(position.entry_price);
       const closeFee = Number((exitPrice * size * feeRate).toFixed(4));
