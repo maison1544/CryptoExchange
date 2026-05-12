@@ -1,6 +1,6 @@
 {
-  "installCommand": "cd apps/user && pnpm install",
-  "buildCommand": "cd apps/user && pnpm build",
+  "installCommand": "cd apps/user && npm install --legacy-peer-deps",
+  "buildCommand": "cd apps/user && npm run build",
   "outputDirectory": "apps/user/.next",
   "framework": "nextjs"
 }
