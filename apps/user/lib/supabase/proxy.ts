@@ -5,9 +5,16 @@ import { getSupabaseCookieOptions } from "@/lib/supabase/config";
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
+  // Use non-NEXT_PUBLIC env vars first (runtime-available in Edge Runtime),
+  // then fall back to NEXT_PUBLIC versions (may be build-time inlined).
   const url =
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    "https://placeholder.supabase.co";
+  const key =
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    "placeholder-key";
 
   const supabase = createServerClient(url, key, {
     cookieOptions: getSupabaseCookieOptions(),
