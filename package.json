@@ -13,6 +13,9 @@
     "build:user": "pnpm --filter user build",
     "start:user": "pnpm --filter user start"
   },
+  "dependencies": {
+    "next": "16.1.6"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC"
