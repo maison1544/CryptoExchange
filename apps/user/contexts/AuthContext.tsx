@@ -17,6 +17,11 @@ import {
 import { recordBackofficeLogin, recordUserLogin } from "@/lib/api/auth";
 import type { User, Session } from "@supabase/supabase-js";
 
+// `pending` / `suspended` are NOT user-facing roles — they signal an
+// intermediate auth state that maps to a friendly Korean error message
+// before we sign the user back out. Keep them internal to this module.
+type ExtendedRole = "user" | "admin" | "agent" | "pending" | "suspended" | null;
+
 export type UserRole = "user" | "admin" | "agent" | null;
 
 interface AuthContextType {
@@ -38,14 +43,6 @@ const supabase = createClient();
 const authCookieName = getSupabaseAuthCookieName();
 const authStorageKey = getSupabaseAuthStorageKey();
 const ROLE_REQUEST_TIMEOUT_MS = 5000;
-const LOGIN_API_TIMEOUT_MS = 30000;
-
-type LoginApiResponse = {
-  error?: string;
-  role?: UserRole;
-  user?: User | null;
-  session?: Session | null;
-};
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -69,55 +66,12 @@ function withTimeout<T>(
   });
 }
 
-async function loginViaApi(
-  email: string,
-  password: string,
-): Promise<LoginApiResponse> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    LOGIN_API_TIMEOUT_MS,
-  );
-
-  try {
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-      signal: controller.signal,
-    });
-
-    let payload: LoginApiResponse | null = null;
-    try {
-      payload = (await res.json()) as LoginApiResponse;
-    } catch {
-      payload = null;
-    }
-
-    if (!res.ok) {
-      return {
-        error: payload?.error || `로그인에 실패했습니다. (${res.status})`,
-      };
-    }
-
-    return payload || { error: "로그인 응답을 확인할 수 없습니다." };
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      return {
-        error: "로그인 요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.",
-      };
-    }
-
-    return {
-      error:
-        error instanceof Error ? error.message : "로그인 요청에 실패했습니다.",
-    };
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
-
-async function detectRole(userId: string): Promise<UserRole> {
+/**
+ * Role detection runs as the freshly-signed-in user, so RLS policies on
+ * `admins`, `agents`, and `user_profiles` (all of which allow self-read
+ * via `auth.uid() = id`) are sufficient — no service_role is needed.
+ */
+async function detectRole(userId: string): Promise<ExtendedRole> {
   try {
     const { data: admin } = await supabase
       .from("admins")
@@ -139,15 +93,45 @@ async function detectRole(userId: string): Promise<UserRole> {
       .eq("id", userId)
       .maybeSingle();
     if (profile) {
-      if (profile.status === "pending_approval") return "pending" as UserRole;
-      if (profile.status === "suspended" || profile.status === "banned")
-        return "suspended" as UserRole;
+      if (profile.status === "pending_approval") return "pending";
+      if (profile.status === "suspended" || profile.status === "banned") {
+        return "suspended";
+      }
       return "user";
     }
   } catch {
-    // RLS or network error — fallback to null
+    // RLS or network error — fallback to null. Caller will treat as "no role".
   }
   return null;
+}
+
+/**
+ * The auth context only exposes the three "active" roles to consumers;
+ * the intermediate `pending` / `suspended` states are treated as "no
+ * role" once the user has been signed back out.
+ */
+function narrowRole(ext: ExtendedRole): UserRole {
+  if (ext === "user" || ext === "admin" || ext === "agent") return ext;
+  return null;
+}
+
+/**
+ * Map Supabase auth error messages to user-facing Korean copy. Anything
+ * not explicitly recognised falls back to the raw message so we never
+ * silently swallow a real error.
+ */
+function translateAuthError(rawMessage: string): string {
+  const lower = rawMessage.toLowerCase();
+  if (lower.includes("invalid login credentials")) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+  if (lower.includes("email not confirmed")) {
+    return "이메일 인증이 완료되지 않았습니다.";
+  }
+  if (lower.includes("rate limit") || lower.includes("too many")) {
+    return "너무 많은 로그인 시도입니다. 잠시 후 다시 시도해주세요.";
+  }
+  return rawMessage || "로그인에 실패했습니다.";
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -178,7 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               ROLE_REQUEST_TIMEOUT_MS,
               "권한 확인 시간이 초과되었습니다.",
             );
-            if (!cancelled) setRole(r);
+            if (!cancelled) setRole(narrowRole(r));
           } catch {
             if (!cancelled) setRole(null);
           }
@@ -195,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               ROLE_REQUEST_TIMEOUT_MS,
               "권한 확인 시간이 초과되었습니다.",
             );
-            if (!cancelled) setRole(r);
+            if (!cancelled) setRole(narrowRole(r));
           } catch {
             // ignore — role will remain as-is
           }
@@ -227,53 +211,93 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: string,
       password: string,
     ): Promise<{ error?: string; role?: UserRole }> => {
+      // We previously POSTed to /api/auth/login and then mirrored the
+      // returned session into the browser client via `setSession()`. That
+      // hybrid flow had two well-known failure modes:
+      //   1. `setSession()` acquires the same NavigatorLock that the auth
+      //      client uses for its initial `INITIAL_SESSION` recovery. On a
+      //      fresh page where the user clicks "login" before that recovery
+      //      finishes, `setSession()` can deadlock until its 5 s timeout
+      //      fires, the function then "succeeds" with state half-written,
+      //      and the user has to refresh and retry to actually navigate.
+      //   2. The server route writes the SSR cookie format while
+      //      `setSession()` writes the browser-client format. Whichever
+      //      runs second "wins" and the loser can leave the cookie in a
+      //      state where the next middleware tick sees no user.
+      //
+      // The cleanest fix — and the one Supabase recommends in their
+      // Next.js + @supabase/ssr docs — is to sign in directly via the
+      // browser client. It writes the cookie via the configured storage
+      // adapter (which matches what `createServerClient` reads on the
+      // next request), fires `SIGNED_IN` exactly once, and never races
+      // with itself.
       loginInProgressRef.current = true;
       try {
-        const loginResult = await loginViaApi(email, password);
-        if (loginResult.error) {
-          return { error: loginResult.error };
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+
+        if (error) {
+          return { error: translateAuthError(error.message) };
         }
 
-        const nextUser = loginResult.user ?? null;
-        const nextSession = loginResult.session ?? null;
-        const nextRole = loginResult.role ?? null;
-
-        if (!nextUser || !nextSession || !nextRole) {
+        if (!data.user || !data.session) {
           return { error: "로그인 응답을 확인할 수 없습니다." };
         }
 
+        // Role check runs *after* sign-in (RLS allows the user to read
+        // their own admin / agent / user_profile row). If they're in an
+        // unusable state we immediately sign them back out so the
+        // session does not survive past this function call.
+        let detected: ExtendedRole = null;
         try {
-          await withTimeout(
-            supabase.auth.setSession({
-              access_token: nextSession.access_token,
-              refresh_token: nextSession.refresh_token,
-            }),
-            5000,
-            "세션 저장 시간이 초과되었습니다. 다시 시도해주세요.",
+          detected = await withTimeout(
+            detectRole(data.user.id),
+            ROLE_REQUEST_TIMEOUT_MS,
+            "권한 확인 시간이 초과되었습니다. 다시 시도해주세요.",
           );
-        } catch {}
+        } catch (err) {
+          await supabase.auth.signOut().catch(() => {});
+          return {
+            error:
+              err instanceof Error
+                ? err.message
+                : "권한 확인 중 오류가 발생했습니다.",
+          };
+        }
 
-        try {
-          if (nextRole === "user") {
-            await withTimeout(
-              recordUserLogin(nextSession.access_token),
-              4000,
-              "사용자 로그인 기록 저장 시간이 초과되었습니다.",
-            );
-          } else if (nextRole === "admin" || nextRole === "agent") {
-            await withTimeout(
-              recordBackofficeLogin(nextSession.access_token),
-              4000,
-              "관리자 로그인 기록 저장 시간이 초과되었습니다.",
-            );
-          }
-        } catch {}
+        if (detected === "pending") {
+          await supabase.auth.signOut().catch(() => {});
+          return {
+            error: "관리자 승인 대기 중입니다. 승인 후 로그인할 수 있습니다.",
+          };
+        }
+        if (detected === "suspended") {
+          await supabase.auth.signOut().catch(() => {});
+          return { error: "계정이 정지되었습니다. 관리자에게 문의하세요." };
+        }
+        if (!detected) {
+          await supabase.auth.signOut().catch(() => {});
+          return { error: "로그인 권한을 확인할 수 없습니다." };
+        }
 
-        setUser(nextUser);
-        setSession(nextSession);
-        setRole(nextRole);
+        // Record the login asynchronously — never block navigation on it.
+        // The previous flow `await`ed this with a 4 s timeout, which made
+        // a sluggish edge-function look like a frozen login button.
+        const accessToken = data.session.access_token;
+        if (detected === "user") {
+          void recordUserLogin(accessToken).catch(() => {});
+        } else {
+          void recordBackofficeLogin(accessToken).catch(() => {});
+        }
+
+        const narrowed = narrowRole(detected);
+        setUser(data.user);
+        setSession(data.session);
+        setRole(narrowed);
         setIsInitialized(true);
-        return { role: nextRole };
+        return { role: narrowed };
       } finally {
         loginInProgressRef.current = false;
       }

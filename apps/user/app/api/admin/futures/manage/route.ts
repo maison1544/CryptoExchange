@@ -7,10 +7,17 @@ import {
 } from "@/lib/server/siteSettings";
 import { rateLimit } from "@/lib/rateLimit";
 import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
+import { fetchSymbolLastPrice } from "@/lib/server/marketPrice";
+
+// Binance Futures REST endpoints (fapi.binance.com) geo-block Vercel's
+// US-East data center with HTTP 451, so this route must NOT call them
+// directly. All upstream price lookups go through @/lib/server/marketPrice
+// which falls back through OKX → Binance.US.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getCurrentPrice(admin: any, symbol: string): Promise<number> {
-  // 1) mark_prices table (updated every 1s by liquidation worker)
+  // 1) mark_prices table (updated every 1s by liquidation worker — fastest
+  //    path under normal operation, no outbound HTTP).
   const { data: markRow } = await admin
     .from("mark_prices")
     .select("mark_price")
@@ -19,20 +26,14 @@ async function getCurrentPrice(admin: any, symbol: string): Promise<number> {
   const dbPrice = Number(markRow?.mark_price);
   if (Number.isFinite(dbPrice) && dbPrice > 0) return dbPrice;
 
-  // 2) Binance REST fallback
-  try {
-    const response = await fetch(
-      `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
-      { cache: "no-store", signal: AbortSignal.timeout(5000) },
-    );
-    if (response.ok) {
-      const payload = (await response.json()) as { price?: string };
-      const restPrice = Number(payload.price);
-      if (Number.isFinite(restPrice) && restPrice > 0) return restPrice;
-    }
-  } catch {
-    // Binance unreachable
-  }
+  // 2) Upstream fallback chain (OKX perp → Binance.US spot). Required
+  //    whenever the liquidation worker is paused / behind so the admin
+  //    force-close button still works in production. Previously this
+  //    block called Binance Futures directly, which raised HTTP 451 from
+  //    Vercel's us-east region and surfaced as the user-visible
+  //    "Failed to fetch market price" error.
+  const lastPrice = await fetchSymbolLastPrice(symbol);
+  if (lastPrice !== null) return lastPrice;
 
   throw new Error("Failed to fetch market price");
 }

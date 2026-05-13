@@ -7,6 +7,11 @@ import {
 import { normalizeCommissionRate } from "@/lib/utils/commission";
 import { rateLimit } from "@/lib/rateLimit";
 import { recalculateCrossLiquidationPrices } from "@/lib/server/recalcCrossLiq";
+import { fetchSymbolLastPrice } from "@/lib/server/marketPrice";
+
+// Binance Futures REST (fapi.binance.com) geo-blocks Vercel's us-east IPs
+// with HTTP 451, so we never call it directly here. Upstream price
+// lookups flow through @/lib/server/marketPrice (OKX → Binance.US).
 
 async function getCurrentPrice(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,7 +19,8 @@ async function getCurrentPrice(
   symbol: string,
   clientPrice?: number,
 ): Promise<number> {
-  // 1) Try mark_prices table (updated every 1s by liquidation worker)
+  // 1) mark_prices table (updated every 1s by the liquidation worker —
+  //    fastest path under normal operation, no outbound HTTP).
   const { data: markRow } = await admin
     .from("mark_prices")
     .select("mark_price")
@@ -26,24 +32,15 @@ async function getCurrentPrice(
     return dbPrice;
   }
 
-  // 2) Fallback: Binance REST API
-  try {
-    const response = await fetch(
-      `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`,
-      { cache: "no-store", signal: AbortSignal.timeout(5000) },
-    );
-    if (response.ok) {
-      const payload = (await response.json()) as { price?: string };
-      const restPrice = Number(payload.price);
-      if (Number.isFinite(restPrice) && restPrice > 0) {
-        return restPrice;
-      }
-    }
-  } catch {
-    // Binance unreachable from this region, continue to client fallback
+  // 2) Upstream fallback chain (OKX perp → Binance.US spot).
+  const lastPrice = await fetchSymbolLastPrice(symbol);
+  if (lastPrice !== null) {
+    return lastPrice;
   }
 
-  // 3) Fallback: client-supplied price
+  // 3) Final fallback: trust the price the user's browser saw via the
+  //    live WebSocket. Last-line defence so a user can still close a
+  //    position when every upstream source is unreachable.
   if (Number.isFinite(clientPrice) && clientPrice! > 0) {
     return clientPrice!;
   }
