@@ -17,6 +17,11 @@ import {
 export const runtime = "nodejs";
 // Disable any caching so each cron tick fetches fresh data.
 export const dynamic = "force-dynamic";
+// Binance Futures REST endpoints (fapi.binance.com) reject requests from
+// US-based cloud IPs with 451 / 403, which kills the cron when it runs in
+// the default iad1 (US-East) region. Pin this function to non-US regions
+// where Binance is reachable.
+export const preferredRegion = ["hnd1", "sin1", "icn1", "fra1"];
 
 const BINANCE_FUTURES_REST_URL = "https://fapi.binance.com";
 
@@ -86,7 +91,7 @@ type SymbolPriceWindow = {
 async function fetchSymbolPriceWindow(
   symbol: string,
   cutoffMs: number,
-): Promise<SymbolPriceWindow | null> {
+): Promise<{ window: SymbolPriceWindow | null; error?: string }> {
   try {
     // Dynamic limit: we need enough klines to cover [cutoffMs, now] so that a
     // long-standing pending order (placed many minutes ago) still gets its
@@ -103,11 +108,11 @@ async function fetchSymbolPriceWindow(
       { cache: "no-store", signal: AbortSignal.timeout(5000) },
     );
     if (!response.ok) {
-      return null;
+      return { window: null, error: `binance_http_${response.status}` };
     }
     const rows = (await response.json()) as unknown[];
     if (!Array.isArray(rows) || rows.length === 0) {
-      return null;
+      return { window: null, error: "binance_empty_rows" };
     }
 
     let highSinceCutoff = -Infinity;
@@ -146,16 +151,21 @@ async function fetchSymbolPriceWindow(
       !Number.isFinite(lowSinceCutoff) ||
       lowSinceCutoff <= 0
     ) {
-      return null;
+      return { window: null, error: "no_kline_in_cutoff_window" };
     }
 
     return {
-      lastPrice: lastPrice > 0 ? lastPrice : highSinceCutoff,
-      highSinceCutoff,
-      lowSinceCutoff,
+      window: {
+        lastPrice: lastPrice > 0 ? lastPrice : highSinceCutoff,
+        highSinceCutoff,
+        lowSinceCutoff,
+      },
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      window: null,
+      error: err instanceof Error ? err.message : "fetch_threw",
+    };
   }
 }
 
@@ -242,9 +252,12 @@ export async function GET(req: NextRequest) {
     ),
   );
   const priceWindowBySymbol = new Map<string, SymbolPriceWindow>();
-  for (const [sym, window] of priceEntries) {
-    if (window !== null) {
-      priceWindowBySymbol.set(sym, window);
+  const symbolFetchErrors: Record<string, string> = {};
+  for (const [sym, result] of priceEntries) {
+    if (result.window !== null) {
+      priceWindowBySymbol.set(sym, result.window);
+    } else if (result.error) {
+      symbolFetchErrors[sym] = result.error;
     }
   }
 
@@ -255,6 +268,7 @@ export async function GET(req: NextRequest) {
         payload: {
           phase: "no_fresh_price_window",
           symbols_attempted: distinctSymbols,
+          fetch_errors: symbolFetchErrors,
           symbols_with_data: 0,
           cutoff_ms: cutoffMs,
           now_ms: nowMs,
@@ -268,6 +282,7 @@ export async function GET(req: NextRequest) {
       filled: 0,
       warning: "no_fresh_price_window",
       symbols_attempted: distinctSymbols,
+      fetch_errors: symbolFetchErrors,
     });
   }
 
