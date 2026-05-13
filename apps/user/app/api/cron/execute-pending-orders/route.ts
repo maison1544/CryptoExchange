@@ -88,12 +88,18 @@ async function fetchSymbolPriceWindow(
   cutoffMs: number,
 ): Promise<SymbolPriceWindow | null> {
   try {
-    // limit=3 covers the in-progress minute + the two most recent closed
-    // minutes, which is enough for a 60s cron cadence with safety margin.
+    // Dynamic limit: we need enough klines to cover [cutoffMs, now] so that a
+    // long-standing pending order (placed many minutes ago) still gets its
+    // entire price history scanned for a wick that touched the limit. We
+    // add a 2-minute safety margin, clamp to [3, 720] minutes (Binance
+    // allows up to 1500 klines per request), and request 1m candles.
+    const minutesNeeded =
+      Math.ceil(Math.max(0, Date.now() - cutoffMs) / 60_000) + 2;
+    const klineLimit = Math.min(Math.max(minutesNeeded, 3), 720);
     const response = await fetch(
       `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodeURIComponent(
         symbol,
-      )}&interval=1m&limit=3`,
+      )}&interval=1m&limit=${klineLimit}`,
       { cache: "no-store", signal: AbortSignal.timeout(5000) },
     );
     if (!response.ok) {
