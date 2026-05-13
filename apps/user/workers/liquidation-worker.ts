@@ -781,39 +781,15 @@ async function runLiquidationCheck() {
       continue;
     }
 
-    const hasIsolatedPositions = userPositions.some(
-      (position) => position.margin_mode === "isolated",
-    );
-
+    // Always use the in-process cross-margin liquidation routine. The previous
+    // implementation tried to call a `liquidate_account` RPC for cross-only
+    // accounts, but that function was never persisted in the schema and the
+    // worker silently skipped every cross-only user when the RPC returned
+    // `PGRST202 - Could not find the function`. The JS path below is the
+    // single source of truth for the tiered maintenance-margin math (see
+    // lib/utils/futuresRisk.ts) and works for both cross-only and mixed
+    // accounts.
     try {
-      if (!hasIsolatedPositions) {
-        const { data: result, error: rpcError } = await supabase.rpc(
-          "liquidate_account",
-          {
-            p_user_id: userId,
-            p_mark_prices: markPricesJson,
-          },
-        );
-
-        if (rpcError) {
-          console.error(
-            `[Worker] liquidate_account error for ${userId}:`,
-            rpcError.message,
-          );
-          continue;
-        }
-
-        if (result?.action === "liquidated") {
-          log(
-            `[Worker] ⚡ LIQUIDATED user=${userId} ` +
-              `positions=${result.positions_closed} ` +
-              `equity=${result.equity} mm=${result.maintenance_margin}`,
-          );
-        }
-
-        continue;
-      }
-
       const { data: profile, error: profileError } = await supabase
         .from("user_profiles")
         .select("futures_balance")
@@ -822,7 +798,7 @@ async function runLiquidationCheck() {
 
       if (profileError || !profile) {
         console.error(
-          `[Worker] Failed to load mixed account profile for ${userId}:`,
+          `[Worker] Failed to load profile for ${userId}:`,
           profileError?.message,
         );
         continue;
