@@ -321,25 +321,6 @@ export async function GET(req: NextRequest) {
     .eq("status", "pending")
     .order("placed_at", { ascending: true });
 
-  // Heartbeat AFTER the pending-orders query so we can confirm what
-  // the admin client actually sees (e.g. catch service-role vs RLS misconfig).
-  try {
-    await admin.from("cron_diagnostics").insert({
-      job: "execute_pending_orders_heartbeat",
-      payload: {
-        phase: "after_query",
-        at: new Date().toISOString(),
-        pending_query_error: pendingError?.message ?? null,
-        pending_rows: pendingRows?.length ?? 0,
-        supabase_url_host: new URL(supabaseUrl).host,
-        service_role_key_prefix: serviceRoleKey.slice(0, 12),
-        service_role_key_len: serviceRoleKey.length,
-      },
-    });
-  } catch {
-    // ignore
-  }
-
   if (pendingError) {
     return NextResponse.json(
       { error: `pending_query_failed: ${pendingError.message}` },
@@ -388,21 +369,6 @@ export async function GET(req: NextRequest) {
   }
 
   if (priceWindowBySymbol.size === 0) {
-    try {
-      await admin.from("cron_diagnostics").insert({
-        job: "execute_pending_orders",
-        payload: {
-          phase: "no_fresh_price_window",
-          symbols_attempted: distinctSymbols,
-          fetch_errors: symbolFetchErrors,
-          symbols_with_data: 0,
-          cutoff_ms: cutoffMs,
-          now_ms: nowMs,
-        },
-      });
-    } catch {
-      // ignore
-    }
     return NextResponse.json({
       checked: pendingOrders.length,
       filled: 0,
@@ -421,18 +387,10 @@ export async function GET(req: NextRequest) {
   // ── Stage 3: per-order fill decision + atomic RPC call ──
   const filled: FilledResult[] = [];
   const errors: Array<{ order_id: number; error: string }> = [];
-  const decisions: Array<Record<string, unknown>> = [];
 
   for (const order of pendingOrders) {
     const window = priceWindowBySymbol.get(order.symbol);
-    if (!window) {
-      decisions.push({
-        order_id: order.id,
-        symbol: order.symbol,
-        reason: "no_price_window",
-      });
-      continue;
-    }
+    if (!window) continue;
 
     // A long limit fills when the market trades AT OR BELOW the limit; the
     // matching engine on a real exchange would fill on the first downward
@@ -444,18 +402,6 @@ export async function GET(req: NextRequest) {
       order.direction === "long"
         ? window.lowSinceCutoff <= limitPrice
         : window.highSinceCutoff >= limitPrice;
-
-    decisions.push({
-      order_id: order.id,
-      symbol: order.symbol,
-      direction: order.direction,
-      limit: limitPrice,
-      low: window.lowSinceCutoff,
-      high: window.highSinceCutoff,
-      last: window.lastPrice,
-      should_fill: shouldFill,
-    });
-
     if (!shouldFill) continue;
 
     // Refresh the user's balance + cross positions so the liquidation
@@ -671,29 +617,10 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  // Persist a compact diagnostic snapshot to the database so operators can
-  // inspect why a particular pending order is or isn't being filled. The
-  // table is RLS-locked and only the service_role (used by this route)
-  // can write or read it.
-  try {
-    await admin.from("cron_diagnostics").insert({
-      job: "execute_pending_orders",
-      payload: {
-        checked: pendingOrders.length,
-        filled: filled.length,
-        decisions,
-        errors,
-      },
-    });
-  } catch {
-    // never fail the cron because diagnostics failed
-  }
-
   return NextResponse.json({
     checked: pendingOrders.length,
     filled: filled.length,
     results: filled,
-    decisions,
     errors,
   });
 }

@@ -108,7 +108,12 @@ export function PositionTabs({
   const [feeRate, setFeeRate] = useState(DEFAULT_FEE_RATE);
   const [walletBalance, setWalletBalance] = useState(0);
   const [pendingOrders, setPendingOrders] = useState<PendingOrderItem[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
+  // `ordersLoading` only stays true until the first fetch settles. Subsequent
+  // 3-second auto-refreshes do NOT flip it back to true — re-toggling on
+  // every refresh used to make the table briefly flash the "불러오는 중"
+  // empty-state row even when data was already on screen.
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [hasLoadedOrders, setHasLoadedOrders] = useState(false);
   const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
 
   const loadWalletBalance = useCallback(async () => {
@@ -132,10 +137,14 @@ export function PositionTabs({
     if (!user) {
       setPendingOrders([]);
       setOrdersLoading(false);
+      setHasLoadedOrders(true);
       return;
     }
 
-    setOrdersLoading(true);
+    // Do NOT flip `ordersLoading` to true on background refreshes — that
+    // is what previously caused the "불러오는 중" message to flash every
+    // 3 seconds even when there were already orders rendered on screen.
+    // We only show the spinner row before the very first response lands.
 
     const { data, error } = await supabase
       .from("futures_orders")
@@ -164,7 +173,11 @@ export function PositionTabs({
       );
     }
 
+    // After the first response (regardless of error or empty result) we
+    // permanently leave the loading state so subsequent refreshes are
+    // invisible to the user. The cleared spinner stays cleared.
     setOrdersLoading(false);
+    setHasLoadedOrders(true);
   }, [user]);
 
   useEffect(() => {
@@ -775,7 +788,7 @@ export function PositionTabs({
                 </tr>
               </thead>
               <tbody>
-                {ordersLoading ? (
+                {!hasLoadedOrders && ordersLoading ? (
                   <tr>
                     <td
                       colSpan={8}

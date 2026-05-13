@@ -4,6 +4,11 @@ import { useEffect, useRef, useCallback, useState } from "react";
 
 const BINANCE_FUTURES_REST_URL = "https://fapi.binance.com";
 const BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/ws/";
+// Continuously refresh the most recent 2 klines via REST so the chart
+// keeps moving even if the WebSocket silently drops frames mid-session.
+// 2s cadence is chosen to mirror what users perceive as "realtime" on
+// other exchanges and keeps the request weight negligible (limit=2).
+const LIVE_POLL_INTERVAL_MS = 2000;
 
 export type KlineInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 
@@ -55,6 +60,7 @@ export function useBinanceKline({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const livePollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [historicalBars, setHistoricalBars] = useState<KlineBar[]>([]);
   const [latestBar, setLatestBar] = useState<KlineBar | null>(null);
@@ -81,6 +87,33 @@ export function useBinanceKline({
       console.error("[BinanceKline] REST fetch error:", err);
     } finally {
       setIsLoading(false);
+    }
+  }, [symbol, interval, enabled]);
+
+  // Lightweight live refresh: pulls the 2 most recent klines and updates
+  // the in-progress bar (and, when a new minute opens, the just-finalized
+  // previous bar). This is the REST safety-net that guarantees the chart
+  // keeps moving when the WebSocket stream stalls. Errors are swallowed
+  // because the WS path is the primary source of truth.
+  const fetchLatestBar = useCallback(async () => {
+    if (!enabled || !symbol) return;
+    try {
+      const encodedSymbol = encodeURIComponent(symbol);
+      const res = await fetch(
+        `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodedSymbol}&interval=${interval}&limit=2`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as unknown[][];
+      if (!Array.isArray(data) || data.length === 0) return;
+      const bars = data.map(parseRestKline);
+      const last = bars[bars.length - 1];
+      // klinecharts.updateData() routes the bar to the in-progress slot
+      // when its timestamp matches the most recent bar, so feeding the
+      // newest kline always works even when the minute boundary rolls.
+      setLatestBar(last);
+    } catch {
+      // ignore
     }
   }, [symbol, interval, enabled]);
 
@@ -161,6 +194,24 @@ export function useBinanceKline({
       disconnect();
     };
   }, [connect, disconnect]);
+
+  // REST live-poll runs for the entire lifetime of the hook (regardless
+  // of WS state). Cheap (limit=2) and guarantees the chart updates even
+  // when fstream silently stops delivering @kline frames — mirrors what
+  // useBinanceWebSocket does for ticker / depth.
+  useEffect(() => {
+    if (!enabled || !symbol) return;
+    void fetchLatestBar();
+    livePollTimerRef.current = setInterval(() => {
+      void fetchLatestBar();
+    }, LIVE_POLL_INTERVAL_MS);
+    return () => {
+      if (livePollTimerRef.current) {
+        clearInterval(livePollTimerRef.current);
+        livePollTimerRef.current = null;
+      }
+    };
+  }, [enabled, symbol, interval, fetchLatestBar]);
 
   // Reset on symbol/interval change
   useEffect(() => {

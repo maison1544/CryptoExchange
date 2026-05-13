@@ -393,20 +393,21 @@ export function useBinanceWebSocket({
     };
   }, [connect, disconnect, startFallbackPolling]);
 
-  // Reset data when symbol changes
+  // Reset data when symbol changes. We deliberately do NOT stop the REST
+  // fallback polling here: the connect-effect above re-runs on symbol
+  // change and is already responsible for tearing down + restarting both
+  // the WebSocket and the polling timer. Calling `stopFallbackPolling()`
+  // from inside this setTimeout(0) used to race with `startFallbackPolling()`
+  // from the connect-effect on initial mount and silently kill the REST
+  // backstop, which is what caused the ticker / chart to "freeze" while
+  // the order book (driven by the @depth WS stream every 100 ms) kept
+  // visibly updating.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setTicker(null);
-      setOrderBook(null);
-      setRecentTrades([]);
-      setMarkPrice(null);
-      stopFallbackPolling();
-    }, 0);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [symbol, stopFallbackPolling]);
+    setTicker(null);
+    setOrderBook(null);
+    setRecentTrades([]);
+    setMarkPrice(null);
+  }, [symbol]);
 
   return {
     ticker,
