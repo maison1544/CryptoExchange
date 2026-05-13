@@ -23,7 +23,11 @@ export const dynamic = "force-dynamic";
 // where Binance is reachable.
 export const preferredRegion = ["hnd1", "sin1", "icn1", "fra1"];
 
-const BINANCE_FUTURES_REST_URL = "https://fapi.binance.com";
+// Bybit's public market data API is reachable from Vercel's US data
+// centers (which Binance fapi rejects with HTTP 451). Bybit's "linear"
+// category covers USDT perpetual contracts with the same BTCUSDT-style
+// symbol naming, so the price window math is unchanged.
+const BYBIT_REST_URL = "https://api.bybit.com";
 
 type PendingOrder = {
   id: number;
@@ -93,49 +97,65 @@ async function fetchSymbolPriceWindow(
   cutoffMs: number,
 ): Promise<{ window: SymbolPriceWindow | null; error?: string }> {
   try {
-    // Dynamic limit: we need enough klines to cover [cutoffMs, now] so that a
-    // long-standing pending order (placed many minutes ago) still gets its
-    // entire price history scanned for a wick that touched the limit. We
-    // add a 2-minute safety margin, clamp to [3, 720] minutes (Binance
-    // allows up to 1500 klines per request), and request 1m candles.
+    // Dynamic limit: we need enough 1m candles to cover [cutoffMs, now] so
+    // that a long-standing pending order still has its full price history
+    // scanned for a wick that touched the limit. +2 minutes safety margin,
+    // clamped to Bybit's permitted [1, 1000] range.
     const minutesNeeded =
       Math.ceil(Math.max(0, Date.now() - cutoffMs) / 60_000) + 2;
-    const klineLimit = Math.min(Math.max(minutesNeeded, 3), 720);
+    const klineLimit = Math.min(Math.max(minutesNeeded, 3), 1000);
+
+    // Bybit v5 linear perp klines. Response shape:
+    //   { result: { list: [ [start, open, high, low, close, volume, turnover], ... ] } }
+    // The list is returned newest-first; each `start` is the kline open
+    // time in milliseconds. closeTime is implied as start + 60_000.
     const response = await fetch(
-      `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodeURIComponent(
+      `${BYBIT_REST_URL}/v5/market/kline?category=linear&symbol=${encodeURIComponent(
         symbol,
-      )}&interval=1m&limit=${klineLimit}`,
+      )}&interval=1&limit=${klineLimit}`,
       { cache: "no-store", signal: AbortSignal.timeout(5000) },
     );
     if (!response.ok) {
-      return { window: null, error: `binance_http_${response.status}` };
+      return { window: null, error: `bybit_http_${response.status}` };
     }
-    const rows = (await response.json()) as unknown[];
+    const payload = (await response.json()) as {
+      retCode?: number;
+      retMsg?: string;
+      result?: { list?: unknown[] };
+    };
+    if (typeof payload.retCode === "number" && payload.retCode !== 0) {
+      return {
+        window: null,
+        error: `bybit_retcode_${payload.retCode}_${payload.retMsg ?? ""}`,
+      };
+    }
+    const rows = payload.result?.list;
     if (!Array.isArray(rows) || rows.length === 0) {
-      return { window: null, error: "binance_empty_rows" };
+      return { window: null, error: "bybit_empty_rows" };
     }
 
     let highSinceCutoff = -Infinity;
     let lowSinceCutoff = Infinity;
-    let lastPrice = 0;
+    let newestStart = 0;
+    let newestClose = 0;
 
     for (const row of rows) {
-      if (!Array.isArray(row) || row.length < 7) continue;
-      // Binance kline shape:
-      // [ openTime, open, high, low, close, volume, closeTime, ... ]
-      const closeTime = Number(row[6]);
+      if (!Array.isArray(row) || row.length < 5) continue;
+      const startTime = Number(row[0]);
       const high = Number(row[2]);
       const low = Number(row[3]);
       const close = Number(row[4]);
-      if (!Number.isFinite(closeTime)) continue;
+      if (!Number.isFinite(startTime)) continue;
 
-      // Track the last traded close across the window for diagnostics.
-      if (Number.isFinite(close) && close > 0) {
-        lastPrice = close;
+      // Newest entry first (Bybit sorts list DESC by start). Track the
+      // most recent close for `lastPrice` reporting.
+      if (startTime > newestStart && Number.isFinite(close) && close > 0) {
+        newestStart = startTime;
+        newestClose = close;
       }
 
-      // Only consider klines that ended at-or-after the cutoff. The
-      // in-progress kline (closeTime in the future) always qualifies.
+      const closeTime = startTime + 60_000;
+      // Only consider klines that ended at-or-after the cutoff.
       if (closeTime < cutoffMs) continue;
 
       if (Number.isFinite(high) && high > highSinceCutoff) {
@@ -156,7 +176,7 @@ async function fetchSymbolPriceWindow(
 
     return {
       window: {
-        lastPrice: lastPrice > 0 ? lastPrice : highSinceCutoff,
+        lastPrice: newestClose > 0 ? newestClose : highSinceCutoff,
         highSinceCutoff,
         lowSinceCutoff,
       },
