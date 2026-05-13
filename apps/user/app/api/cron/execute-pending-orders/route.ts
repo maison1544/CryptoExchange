@@ -176,6 +176,19 @@ export async function GET(req: NextRequest) {
 
   const admin = createClient(supabaseUrl, serviceRoleKey);
 
+  // Unconditional heartbeat: guarantees a row per cron invocation regardless
+  // of any later early-returns, so an operator can confirm the route is
+  // actually executing the latest deployed code path.
+  const heartbeatStartedAt = new Date().toISOString();
+  try {
+    await admin.from("cron_diagnostics").insert({
+      job: "execute_pending_orders_heartbeat",
+      payload: { phase: "started", at: heartbeatStartedAt },
+    });
+  } catch {
+    // ignore
+  }
+
   // ── Stage 1: list all pending limit orders ──
   const { data: pendingRows, error: pendingError } = await admin
     .from("futures_orders")
