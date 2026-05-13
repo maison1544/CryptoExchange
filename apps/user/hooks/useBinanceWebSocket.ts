@@ -182,8 +182,6 @@ export function useBinanceWebSocket({
   const [markPrice, setMarkPrice] = useState<BinanceMarkPriceData | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  const wsReceivedDataRef = useRef(false);
-
   const stopFallbackPolling = useCallback(() => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
@@ -278,16 +276,21 @@ export function useBinanceWebSocket({
           setMarkPrice(mpData);
         }
 
-        // Once any real WS data flows in, we can stop the REST fallback.
-        if (!wsReceivedDataRef.current) {
-          wsReceivedDataRef.current = true;
-          stopFallbackPolling();
-        }
+        // NOTE: we deliberately do NOT stop the REST fallback once WS
+        // delivers a frame. Binance's @ticker stream occasionally pauses
+        // for several seconds (network hiccups, server-side throttling,
+        // proxy buffering, etc.) and there is no out-of-band signal that
+        // tells us "frames have stopped". Without a continuous REST
+        // backstop the displayed price would freeze until the page is
+        // manually refreshed. Running REST every 3s costs ~1 small
+        // request per symbol and is a negligible price for guaranteed
+        // freshness; WS still wins inside that 3s window because it
+        // updates the same React state at sub-second latency.
       } catch (err) {
         console.error("[BinanceWS] 메시지 파싱 오류:", err);
       }
     },
-    [stopFallbackPolling],
+    [],
   );
 
   const connect = useCallback(() => {
@@ -338,7 +341,6 @@ export function useBinanceWebSocket({
     enabled,
     handleMessage,
     startFallbackPolling,
-    stopFallbackPolling,
   ]);
 
   const disconnect = useCallback(() => {
@@ -361,9 +363,9 @@ export function useBinanceWebSocket({
 
   useEffect(() => {
     // Always kick off REST polling immediately so data is visible within ~1s,
-    // even if the WebSocket handshake is slow or blocked. The WS upgrade will
-    // stop polling as soon as the first live frame arrives.
-    wsReceivedDataRef.current = false;
+    // even if the WebSocket handshake is slow or blocked. REST polling keeps
+    // running for the lifetime of the connection (3s cadence) so the price
+    // never freezes if the WS silently drops frames mid-session.
     startFallbackPolling();
 
     const timer = setTimeout(() => {
@@ -383,7 +385,6 @@ export function useBinanceWebSocket({
       setOrderBook(null);
       setRecentTrades([]);
       setMarkPrice(null);
-      wsReceivedDataRef.current = false;
       stopFallbackPolling();
     }, 0);
 

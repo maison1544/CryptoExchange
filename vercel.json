@@ -2,5 +2,11 @@
   "installCommand": "npm install --legacy-peer-deps && cd apps/user && npm install --legacy-peer-deps",
   "buildCommand": "cd apps/user && npm run build",
   "outputDirectory": "apps/user/.next",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/cron/execute-pending-orders",
+      "schedule": "* * * * *"
+    }
+  ]
 }
