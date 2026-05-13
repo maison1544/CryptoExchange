@@ -74,6 +74,14 @@ type WithdrawalAggregateRow = {
   status: string | null;
 };
 
+type CommissionBreakdown = {
+  trade_fee: number;
+  rolling: number;
+  loss: number;
+  staking: number;
+  deposit: number;
+};
+
 type PartnerSummary = {
   id: string;
   name: string;
@@ -90,6 +98,8 @@ type PartnerSummary = {
   bankName: string;
   bankAccount: string;
   bankAccountHolder: string;
+  commissionBreakdown: CommissionBreakdown;
+  monthCommissionBreakdown: CommissionBreakdown;
 };
 
 type PartnerSummaryResponse = {
@@ -380,7 +390,10 @@ async function buildPartnerSummary(
       .from("user_profiles")
       .select("id", { count: "exact", head: true })
       .eq("agent_id", agent.id),
-    admin.from("agent_commissions").select("amount").eq("agent_id", agent.id),
+    admin
+      .from("agent_commissions")
+      .select("amount, source_type, created_at")
+      .eq("agent_id", agent.id),
     admin
       .from("withdrawals")
       .select("amount, status")
@@ -412,9 +425,53 @@ async function buildPartnerSummary(
     throw new Error(recentCommissionResult.error.message);
   }
 
-  const totalCommissionEarned = (
-    (commissionResult.data as { amount: number | string | null }[] | null) ?? []
-  ).reduce((sum, row) => sum + toSafeNumber(row.amount), 0);
+  const commissionRows =
+    (commissionResult.data as
+      | {
+          amount: number | string | null;
+          source_type: string | null;
+          created_at: string;
+        }[]
+      | null) ?? [];
+
+  const emptyBreakdown: CommissionBreakdown = {
+    trade_fee: 0,
+    rolling: 0,
+    loss: 0,
+    staking: 0,
+    deposit: 0,
+  };
+  const commissionBreakdown: CommissionBreakdown = { ...emptyBreakdown };
+  const monthCommissionBreakdown: CommissionBreakdown = { ...emptyBreakdown };
+
+  // KST month boundary so the breakdown matches the partner's local month.
+  // Using UTC instead would roll over 9 hours early for Korean partners.
+  const now = new Date();
+  const kstMonthLabel = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+  }).format(now);
+
+  let totalCommissionEarned = 0;
+  for (const row of commissionRows) {
+    const amount = toSafeNumber(row.amount);
+    totalCommissionEarned += amount;
+    const key = (row.source_type ?? "") as keyof CommissionBreakdown;
+    if (key in commissionBreakdown) {
+      commissionBreakdown[key] += amount;
+    }
+
+    const rowMonthLabel = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+    }).format(new Date(row.created_at));
+
+    if (rowMonthLabel === kstMonthLabel && key in monthCommissionBreakdown) {
+      monthCommissionBreakdown[key] += amount;
+    }
+  }
 
   const approvedWithdrawalAmount = (
     (withdrawalResult.data as
@@ -462,6 +519,8 @@ async function buildPartnerSummary(
     bankName: agent.bank_name || "",
     bankAccount: agent.bank_account || "",
     bankAccountHolder: agent.bank_account_holder || "",
+    commissionBreakdown,
+    monthCommissionBreakdown,
   };
 
   const recentCommissions = (
