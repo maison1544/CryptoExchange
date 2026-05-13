@@ -176,19 +176,6 @@ export async function GET(req: NextRequest) {
 
   const admin = createClient(supabaseUrl, serviceRoleKey);
 
-  // Unconditional heartbeat: guarantees a row per cron invocation regardless
-  // of any later early-returns, so an operator can confirm the route is
-  // actually executing the latest deployed code path.
-  const heartbeatStartedAt = new Date().toISOString();
-  try {
-    await admin.from("cron_diagnostics").insert({
-      job: "execute_pending_orders_heartbeat",
-      payload: { phase: "started", at: heartbeatStartedAt },
-    });
-  } catch {
-    // ignore
-  }
-
   // ── Stage 1: list all pending limit orders ──
   const { data: pendingRows, error: pendingError } = await admin
     .from("futures_orders")
@@ -197,6 +184,25 @@ export async function GET(req: NextRequest) {
     )
     .eq("status", "pending")
     .order("placed_at", { ascending: true });
+
+  // Heartbeat AFTER the pending-orders query so we can confirm what
+  // the admin client actually sees (e.g. catch service-role vs RLS misconfig).
+  try {
+    await admin.from("cron_diagnostics").insert({
+      job: "execute_pending_orders_heartbeat",
+      payload: {
+        phase: "after_query",
+        at: new Date().toISOString(),
+        pending_query_error: pendingError?.message ?? null,
+        pending_rows: pendingRows?.length ?? 0,
+        supabase_url_host: new URL(supabaseUrl).host,
+        service_role_key_prefix: serviceRoleKey.slice(0, 12),
+        service_role_key_len: serviceRoleKey.length,
+      },
+    });
+  } catch {
+    // ignore
+  }
 
   if (pendingError) {
     return NextResponse.json(
