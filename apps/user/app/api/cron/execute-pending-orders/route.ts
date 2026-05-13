@@ -246,10 +246,18 @@ export async function GET(req: NextRequest) {
   // ── Stage 3: per-order fill decision + atomic RPC call ──
   const filled: FilledResult[] = [];
   const errors: Array<{ order_id: number; error: string }> = [];
+  const decisions: Array<Record<string, unknown>> = [];
 
   for (const order of pendingOrders) {
     const window = priceWindowBySymbol.get(order.symbol);
-    if (!window) continue;
+    if (!window) {
+      decisions.push({
+        order_id: order.id,
+        symbol: order.symbol,
+        reason: "no_price_window",
+      });
+      continue;
+    }
 
     // A long limit fills when the market trades AT OR BELOW the limit; the
     // matching engine on a real exchange would fill on the first downward
@@ -261,6 +269,18 @@ export async function GET(req: NextRequest) {
       order.direction === "long"
         ? window.lowSinceCutoff <= limitPrice
         : window.highSinceCutoff >= limitPrice;
+
+    decisions.push({
+      order_id: order.id,
+      symbol: order.symbol,
+      direction: order.direction,
+      limit: limitPrice,
+      low: window.lowSinceCutoff,
+      high: window.highSinceCutoff,
+      last: window.lastPrice,
+      should_fill: shouldFill,
+    });
+
     if (!shouldFill) continue;
 
     // Refresh the user's balance + cross positions so the liquidation
@@ -476,10 +496,23 @@ export async function GET(req: NextRequest) {
     }),
   );
 
+  // Mirror the diagnostics to Vercel's runtime logs so we can debug
+  // mis-fills without exposing the response body to unauthorised callers.
+  console.log(
+    "[cron/execute-pending-orders]",
+    JSON.stringify({
+      checked: pendingOrders.length,
+      filled: filled.length,
+      decisions,
+      errors,
+    }),
+  );
+
   return NextResponse.json({
     checked: pendingOrders.length,
     filled: filled.length,
     results: filled,
+    decisions,
     errors,
   });
 }
