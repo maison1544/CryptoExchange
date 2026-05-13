@@ -496,17 +496,23 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  // Mirror the diagnostics to Vercel's runtime logs so we can debug
-  // mis-fills without exposing the response body to unauthorised callers.
-  console.log(
-    "[cron/execute-pending-orders]",
-    JSON.stringify({
-      checked: pendingOrders.length,
-      filled: filled.length,
-      decisions,
-      errors,
-    }),
-  );
+  // Persist a compact diagnostic snapshot to the database so operators can
+  // inspect why a particular pending order is or isn't being filled. The
+  // table is RLS-locked and only the service_role (used by this route)
+  // can write or read it.
+  try {
+    await admin.from("cron_diagnostics").insert({
+      job: "execute_pending_orders",
+      payload: {
+        checked: pendingOrders.length,
+        filled: filled.length,
+        decisions,
+        errors,
+      },
+    });
+  } catch {
+    // never fail the cron because diagnostics failed
+  }
 
   return NextResponse.json({
     checked: pendingOrders.length,
