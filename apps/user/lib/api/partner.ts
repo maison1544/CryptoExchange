@@ -3,6 +3,14 @@ import { createClient } from "@/lib/supabase/client";
 const supabase = createClient();
 const DEFAULT_PAGE_SIZE = 10;
 
+export type PartnerCommissionBreakdown = {
+  trade_fee: number;
+  rolling: number;
+  loss: number;
+  staking: number;
+  deposit: number;
+};
+
 export type PartnerSummary = {
   id: string;
   name: string;
@@ -19,6 +27,8 @@ export type PartnerSummary = {
   bankName: string;
   bankAccount: string;
   bankAccountHolder: string;
+  commissionBreakdown: PartnerCommissionBreakdown;
+  monthCommissionBreakdown: PartnerCommissionBreakdown;
 };
 
 export type PartnerRecentCommissionRow = {
