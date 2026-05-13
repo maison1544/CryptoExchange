@@ -194,51 +194,66 @@ export function useBinanceWebSocket({
       return;
     }
 
-    try {
-      const encodedSymbol = encodeURIComponent(symbol);
-      const [tickerRes, depthRes, tradeRes, markPriceRes] = await Promise.all([
-        fetch(
-          `${BINANCE_FUTURES_REST_URL}/fapi/v1/ticker/24hr?symbol=${encodedSymbol}`,
-          { cache: "no-store" },
-        ),
-        fetch(
-          `${BINANCE_FUTURES_REST_URL}/fapi/v1/depth?symbol=${encodedSymbol}&limit=20`,
-          { cache: "no-store" },
-        ),
-        fetch(
-          `${BINANCE_FUTURES_REST_URL}/fapi/v1/aggTrades?symbol=${encodedSymbol}&limit=50`,
-          { cache: "no-store" },
-        ),
-        fetch(
-          `${BINANCE_FUTURES_REST_URL}/fapi/v1/premiumIndex?symbol=${encodedSymbol}`,
-          { cache: "no-store" },
-        ),
-      ]);
+    // Each endpoint is fetched + applied independently so that a transient
+    // failure in one (e.g. a 429 on /depth) cannot block updates to the
+    // others. Previously we awaited Promise.all and bailed out if any
+    // response was !ok, which is what caused the ticker to "freeze" on
+    // the user side whenever a single endpoint hiccuped.
+    const encodedSymbol = encodeURIComponent(symbol);
+    let anySuccess = false;
 
-      if (!tickerRes.ok || !depthRes.ok || !tradeRes.ok || !markPriceRes.ok) {
-        return;
+    const safeFetch = async <T,>(url: string): Promise<T | null> => {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) return null;
+        return (await res.json()) as T;
+      } catch {
+        return null;
       }
+    };
 
-      const [tickerJson, depthJson, tradeJson, markPriceJson] =
-        await Promise.all([
-          tickerRes.json() as Promise<Binance24hTickerRest>,
-          depthRes.json() as Promise<BinanceDepthRest>,
-          tradeRes.json() as Promise<BinanceAggTradeRest[]>,
-          markPriceRes.json() as Promise<BinancePremiumIndexRest>,
-        ]);
+    const [tickerJson, depthJson, tradeJson, markPriceJson] = await Promise.all(
+      [
+        safeFetch<Binance24hTickerRest>(
+          `${BINANCE_FUTURES_REST_URL}/fapi/v1/ticker/24hr?symbol=${encodedSymbol}`,
+        ),
+        safeFetch<BinanceDepthRest>(
+          `${BINANCE_FUTURES_REST_URL}/fapi/v1/depth?symbol=${encodedSymbol}&limit=20`,
+        ),
+        safeFetch<BinanceAggTradeRest[]>(
+          `${BINANCE_FUTURES_REST_URL}/fapi/v1/aggTrades?symbol=${encodedSymbol}&limit=50`,
+        ),
+        safeFetch<BinancePremiumIndexRest>(
+          `${BINANCE_FUTURES_REST_URL}/fapi/v1/premiumIndex?symbol=${encodedSymbol}`,
+        ),
+      ],
+    );
 
+    if (tickerJson) {
       setTicker(parseTickerRestData(tickerJson));
+      anySuccess = true;
+    }
+    if (depthJson) {
       setOrderBook(parseOrderBookRestData(symbol, depthJson));
+      anySuccess = true;
+    }
+    if (tradeJson) {
       setRecentTrades(
-        (tradeJson || [])
+        tradeJson
           .slice()
           .reverse()
           .map((item) => parseTradeRestData(symbol, item)),
       );
+      anySuccess = true;
+    }
+    if (markPriceJson) {
       setMarkPrice(parseMarkPriceRestData(markPriceJson));
+      anySuccess = true;
+    }
+
+    // Reflect connectivity from the perspective of "any data is flowing".
+    if (anySuccess) {
       setIsConnected(true);
-    } catch {
-      setIsConnected(false);
     }
   }, [enabled, symbol]);
 

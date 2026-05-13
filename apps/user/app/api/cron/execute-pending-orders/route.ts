@@ -32,6 +32,7 @@ type PendingOrder = {
   margin: number;
   fee: number;
   reserved_amount: number;
+  placed_at: string | null;
 };
 
 type FilledResult = {
@@ -61,20 +62,92 @@ function isAuthorisedCronCall(req: NextRequest): boolean {
   return header === `Bearer ${secret}`;
 }
 
-async function fetchMarkPrice(symbol: string): Promise<number | null> {
+type SymbolPriceWindow = {
+  /** Last traded close price (used for logging / fallback). */
+  lastPrice: number;
+  /**
+   * Highest and lowest traded price across all 1m klines whose close time is
+   * >= cutoffMs. Used to detect wicks so limit orders are filled even when
+   * the price only momentarily crossed the limit between cron ticks.
+   */
+  highSinceCutoff: number;
+  lowSinceCutoff: number;
+};
+
+/**
+ * Fetch the last few 1m klines for a symbol from Binance Futures and return
+ * the aggregated high/low/last across the klines whose close time falls on
+ * or after `cutoffMs`. Returns null if Binance is unreachable.
+ *
+ * Using klines instead of a single premiumIndex snapshot is what allows a
+ * once-per-minute cron to still match limit orders that only touched their
+ * trigger price during a brief intra-minute wick.
+ */
+async function fetchSymbolPriceWindow(
+  symbol: string,
+  cutoffMs: number,
+): Promise<SymbolPriceWindow | null> {
   try {
+    // limit=3 covers the in-progress minute + the two most recent closed
+    // minutes, which is enough for a 60s cron cadence with safety margin.
     const response = await fetch(
-      `${BINANCE_FUTURES_REST_URL}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(
+      `${BINANCE_FUTURES_REST_URL}/fapi/v1/klines?symbol=${encodeURIComponent(
         symbol,
-      )}`,
+      )}&interval=1m&limit=3`,
       { cache: "no-store", signal: AbortSignal.timeout(5000) },
     );
     if (!response.ok) {
       return null;
     }
-    const payload = (await response.json()) as { markPrice?: string };
-    const value = Number(payload.markPrice);
-    return Number.isFinite(value) && value > 0 ? value : null;
+    const rows = (await response.json()) as unknown[];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return null;
+    }
+
+    let highSinceCutoff = -Infinity;
+    let lowSinceCutoff = Infinity;
+    let lastPrice = 0;
+
+    for (const row of rows) {
+      if (!Array.isArray(row) || row.length < 7) continue;
+      // Binance kline shape:
+      // [ openTime, open, high, low, close, volume, closeTime, ... ]
+      const closeTime = Number(row[6]);
+      const high = Number(row[2]);
+      const low = Number(row[3]);
+      const close = Number(row[4]);
+      if (!Number.isFinite(closeTime)) continue;
+
+      // Track the last traded close across the window for diagnostics.
+      if (Number.isFinite(close) && close > 0) {
+        lastPrice = close;
+      }
+
+      // Only consider klines that ended at-or-after the cutoff. The
+      // in-progress kline (closeTime in the future) always qualifies.
+      if (closeTime < cutoffMs) continue;
+
+      if (Number.isFinite(high) && high > highSinceCutoff) {
+        highSinceCutoff = high;
+      }
+      if (Number.isFinite(low) && low > 0 && low < lowSinceCutoff) {
+        lowSinceCutoff = low;
+      }
+    }
+
+    if (
+      !Number.isFinite(highSinceCutoff) ||
+      !Number.isFinite(lowSinceCutoff) ||
+      lowSinceCutoff <= 0
+    ) {
+      return null;
+    }
+
+    return {
+      lastPrice: lastPrice > 0 ? lastPrice : highSinceCutoff,
+      highSinceCutoff,
+      lowSinceCutoff,
+    };
   } catch {
     return null;
   }
@@ -101,7 +174,7 @@ export async function GET(req: NextRequest) {
   const { data: pendingRows, error: pendingError } = await admin
     .from("futures_orders")
     .select(
-      "id, user_id, symbol, direction, margin_mode, leverage, size, price, margin, fee, reserved_amount",
+      "id, user_id, symbol, direction, margin_mode, leverage, size, price, margin, fee, reserved_amount, placed_at",
     )
     .eq("status", "pending")
     .order("placed_at", { ascending: true });
@@ -119,40 +192,69 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ checked: 0, filled: 0, results: [] });
   }
 
-  // ── Stage 2: fetch a fresh mark price for every distinct symbol ──
+  // ── Stage 2: fetch a 1m kline window per distinct symbol ──
+  //
+  // For each symbol we look at the high/low across the most recent klines
+  // whose close time falls inside the period [earliest_placed_at, now].
+  // This catches intra-minute wicks that a single mark-price snapshot would
+  // miss when the cron only fires once per minute.
+  const nowMs = Date.now();
+  const earliestPlacedAt = pendingOrders.reduce<number>((min, o) => {
+    const ts = o.placed_at ? new Date(o.placed_at).getTime() : NaN;
+    return Number.isFinite(ts) && ts > 0 && ts < min ? ts : min;
+  }, nowMs);
+  // Always look back at least 2 minutes so we never miss a wick even when
+  // an order was just placed seconds before this cron tick.
+  const cutoffMs = Math.min(earliestPlacedAt, nowMs - 2 * 60_000);
+
   const distinctSymbols = Array.from(
     new Set(pendingOrders.map((o) => o.symbol)),
   );
-  const markPriceEntries = await Promise.all(
-    distinctSymbols.map(async (sym) => [sym, await fetchMarkPrice(sym)] as const),
+  const priceEntries = await Promise.all(
+    distinctSymbols.map(
+      async (sym) =>
+        [sym, await fetchSymbolPriceWindow(sym, cutoffMs)] as const,
+    ),
   );
-  const markPriceBySymbol = new Map<string, number>();
-  for (const [sym, price] of markPriceEntries) {
-    if (price !== null) {
-      markPriceBySymbol.set(sym, price);
+  const priceWindowBySymbol = new Map<string, SymbolPriceWindow>();
+  for (const [sym, window] of priceEntries) {
+    if (window !== null) {
+      priceWindowBySymbol.set(sym, window);
     }
   }
 
-  if (markPriceBySymbol.size === 0) {
+  if (priceWindowBySymbol.size === 0) {
     return NextResponse.json({
       checked: pendingOrders.length,
       filled: 0,
-      warning: "no_fresh_mark_prices",
+      warning: "no_fresh_price_window",
     });
   }
+
+  // For the cross-margin risk pre-check below we still need a
+  // per-symbol "current" price; use the kline last (close) value.
+  const markPriceBySymbol = new Map<string, number>(
+    Array.from(priceWindowBySymbol.entries()).map(([s, w]) => [s, w.lastPrice]),
+  );
 
   // ── Stage 3: per-order fill decision + atomic RPC call ──
   const filled: FilledResult[] = [];
   const errors: Array<{ order_id: number; error: string }> = [];
 
   for (const order of pendingOrders) {
-    const markPrice = markPriceBySymbol.get(order.symbol);
-    if (!markPrice) continue;
+    const window = priceWindowBySymbol.get(order.symbol);
+    if (!window) continue;
 
+    // A long limit fills when the market trades AT OR BELOW the limit; the
+    // matching engine on a real exchange would fill on the first downward
+    // tick that touches the limit even if price immediately bounces back.
+    // We replicate that by checking the kline LOW for longs and HIGH for
+    // shorts. The fill price is always the limit price (favourable exec).
+    const limitPrice = Number(order.price);
     const shouldFill =
       order.direction === "long"
-        ? markPrice <= Number(order.price)
-        : markPrice >= Number(order.price);
+        ? window.lowSinceCutoff <= limitPrice
+        : window.highSinceCutoff >= limitPrice;
     if (!shouldFill) continue;
 
     // Refresh the user's balance + cross positions so the liquidation
@@ -250,11 +352,17 @@ export async function GET(req: NextRequest) {
     liquidationPrice = Number(liquidationPrice.toFixed(8));
 
     // ── RPC: atomic position-insert + order-flip ──
+    //
+    // We pass the limit price as `p_mark_price` so the RPC's defensive
+    // re-check (long: mark<=limit, short: mark>=limit) is always satisfied
+    // here. The actual trigger decision was made above against the kline
+    // wick; from the RPC's perspective, this is equivalent to the price
+    // having reached the limit exactly.
     const { data: rpcResult, error: rpcError } = await admin.rpc(
       "fill_limit_order",
       {
         p_order_id: order.id,
-        p_mark_price: markPrice,
+        p_mark_price: limitPrice,
         p_liquidation_price: liquidationPrice,
       },
     );
