@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateTimeText } from "@/components/ui/DateTimeText";
 import { FuturesCloseConfirmContent } from "@/components/trading/FuturesCloseConfirmContent";
 import { UserModal } from "@/components/ui/UserModal";
+import { ActionButton } from "@/components/ui/ActionButton";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
@@ -842,15 +843,15 @@ export function PositionTabs({
                         })}
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => void handleCancelOrder(order)}
+                        <ActionButton
+                          onClick={() => handleCancelOrder(order)}
                           disabled={cancelingOrderId === order.id}
                           className="text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {cancelingOrderId === order.id
                             ? "취소 중..."
                             : "취소"}
-                        </button>
+                        </ActionButton>
                       </td>
                     </tr>
                   ))
@@ -1051,13 +1052,13 @@ export function PositionTabs({
                   >
                     취소
                   </button>
-                  <button
+                  <ActionButton
                     onClick={handleClosePosition}
                     className="flex-1 rounded-full bg-red-500 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-400 disabled:opacity-50"
                     disabled={closing}
                   >
                     {closing ? "처리 중..." : "청산 확인"}
-                  </button>
+                  </ActionButton>
                 </div>
               }
             >

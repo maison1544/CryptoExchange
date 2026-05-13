@@ -2,6 +2,7 @@
 
 import { AppLayout } from "@/components/layout/AppLayout";
 import { UserModal } from "@/components/ui/UserModal";
+import { ActionButton } from "@/components/ui/ActionButton";
 import {
   UserMetricCard,
   UserPageHeader,
@@ -112,12 +113,12 @@ function ConfirmModal({
       size="sm"
       footer={
         <div className="flex gap-3">
-          <button
-            onClick={() => void onConfirm()}
-            className="flex-1 rounded-full bg-yellow-500 py-2.5 text-sm font-semibold text-black transition-colors hover:bg-yellow-400"
+          <ActionButton
+            onClick={onConfirm}
+            className="flex-1 rounded-full bg-yellow-500 py-2.5 text-sm font-semibold text-black transition-colors hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
             확인
-          </button>
+          </ActionButton>
           <button
             onClick={onCancel}
             className="flex-1 rounded-full border border-white/8 bg-white/3 py-2.5 text-sm text-white transition-colors hover:bg-white/5"
@@ -551,13 +552,13 @@ export default function WalletPage() {
                       </p>
                     </div>
 
-                    <button
+                    <ActionButton
                       onClick={handleCreateDeposit}
-                      disabled={depositAmount < 10000}
+                      disabled={depositAmount < MIN_DEPOSIT_USDT}
                       className="w-full rounded-full bg-yellow-500 py-3.5 font-semibold text-black transition-colors hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       입금 신청하기
-                    </button>
+                    </ActionButton>
                   </div>
 
                   {/* 입금 내역 */}
@@ -781,7 +782,7 @@ export default function WalletPage() {
                       </p>
                     </div>
 
-                    <button
+                    <ActionButton
                       onClick={handleCreateWithdrawal}
                       disabled={
                         withdrawAmount < minimumWithdraw ||
@@ -794,7 +795,7 @@ export default function WalletPage() {
                       className="w-full py-3.5 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       출금 신청하기
-                    </button>
+                    </ActionButton>
                   </div>
 
                   {/* 출금 내역 */}

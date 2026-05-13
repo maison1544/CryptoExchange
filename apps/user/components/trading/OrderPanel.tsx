@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { UserModal } from "@/components/ui/UserModal";
+import { ActionButton } from "@/components/ui/ActionButton";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
@@ -770,7 +771,7 @@ export function OrderPanel({
 
         <div className="mt-auto pb-3">
           {isLoggedIn ? (
-            <button
+            <ActionButton
               onClick={handleOrder}
               disabled={
                 orderLoading ||
@@ -787,7 +788,7 @@ export function OrderPanel({
               )}
             >
               {orderType === "limit" ? "지정가 주문" : "주문하기"}
-            </button>
+            </ActionButton>
           ) : (
             <button
               onClick={() => (window.location.href = "/login")}
@@ -815,7 +816,7 @@ export function OrderPanel({
               >
                 취소
               </button>
-              <button
+              <ActionButton
                 onClick={confirmOrder}
                 disabled={orderLoading}
                 className={cn(
@@ -826,7 +827,7 @@ export function OrderPanel({
                 )}
               >
                 {orderLoading ? "처리 중..." : "주문 확인"}
-              </button>
+              </ActionButton>
             </div>
           }
         >

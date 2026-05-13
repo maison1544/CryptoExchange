@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { UserModal } from "@/components/ui/UserModal";
+import { ActionButton } from "@/components/ui/ActionButton";
 import {
   UserMetricCard,
   UserPageHeader,
@@ -438,7 +439,7 @@ export default function StakingPage() {
               >
                 취소
               </button>
-              <button
+              <ActionButton
                 onClick={async () => {
                   if (!user) return;
                   if (!selectedPeriod || !amount) return;
@@ -529,7 +530,7 @@ export default function StakingPage() {
                 className="flex-1 rounded-full bg-yellow-500 py-2.5 text-sm font-semibold text-black transition-colors hover:bg-yellow-400 disabled:bg-gray-700 disabled:text-gray-400"
               >
                 {submitting ? "처리 중..." : "계약 확인"}
-              </button>
+              </ActionButton>
             </div>
           }
         >

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useNotification } from "@/contexts/NotificationContext";
 import { signUp } from "@/lib/api/auth";
+import { useAsyncAction } from "@/hooks/useAsyncAction";
 
 const BANK_OPTIONS = [
   "KB국민은행",
@@ -46,7 +47,6 @@ export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
   const [agreed, setAgreed] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [emailChecked, setEmailChecked] = useState<boolean | null>(null);
   const [emailChecking, setEmailChecking] = useState(false);
@@ -192,11 +192,10 @@ export default function SignupPage() {
     return Object.keys(errors).length === 0;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submitSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateAll()) return;
 
-    setLoading(true);
     let result: { error?: string } | null = null;
     try {
       result = await signUp({
@@ -209,8 +208,10 @@ export default function SignupPage() {
         bankAccountHolder: form.bankAccountHolder.trim(),
         joinCode: form.joinCode || undefined,
       });
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      result = {
+        error: err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.",
+      };
     }
 
     if (result?.error) {
@@ -229,6 +230,9 @@ export default function SignupPage() {
     });
     router.push("/login");
   };
+
+  const { run: handleSubmit, isPending: loading } =
+    useAsyncAction(submitSignup);
 
   return (
     <div className="min-h-screen bg-[#0b0e11] flex flex-col justify-center py-8 px-4 overflow-y-auto">

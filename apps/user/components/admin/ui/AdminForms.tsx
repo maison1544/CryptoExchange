@@ -1,4 +1,5 @@
 import React from "react";
+import { ActionButton, type ActionButtonProps } from "@/components/ui/ActionButton";
 
 export function AdminLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -34,7 +35,7 @@ export function AdminButton({
   variant = "primary",
   size = "md",
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+}: Omit<ActionButtonProps, "size"> & {
   variant?: "primary" | "secondary" | "danger";
   size?: "sm" | "md" | "lg";
 }) {
@@ -55,7 +56,7 @@ export function AdminButton({
   };
 
   return (
-    <button
+    <ActionButton
       {...props}
       className={`${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${props.className || ""}`}
     />

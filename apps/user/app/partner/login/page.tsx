@@ -6,25 +6,22 @@ import { Eye, EyeOff, Users } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
 import { LoadingSpinnerIcon } from "@/components/admin/ui/AdminLoadingSpinner";
+import { useAsyncAction } from "@/hooks/useAsyncAction";
 
 export default function PartnerLoginPage() {
   const router = useRouter();
   const { login } = useAuth();
   const { addToast } = useNotification();
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ email: "", password: "" });
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-
     const result = await login(form.email.trim(), form.password);
-    setLoading(false);
 
     if (result.error) {
       addToast({ title: "로그인 실패", message: result.error, type: "error" });
@@ -38,6 +35,8 @@ export default function PartnerLoginPage() {
     });
     router.push("/partner");
   };
+
+  const { run: handleSubmit, isPending: loading } = useAsyncAction(submitLogin);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">

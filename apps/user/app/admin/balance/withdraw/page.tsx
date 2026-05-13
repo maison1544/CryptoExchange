@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ActionButton } from "@/components/ui/ActionButton";
 import { useDepositWithdrawal } from "@/contexts/DepositWithdrawalContext";
 import { useNotification } from "@/contexts/NotificationContext";
 import { TrendingDown, Wallet, Clock } from "lucide-react";
@@ -275,7 +276,7 @@ export default function WithdrawPage() {
             </div>
           </div>
 
-          <button
+          <ActionButton
             onClick={handleSubmit}
             disabled={
               withdrawAmount < minimumWithdraw ||
@@ -288,7 +289,7 @@ export default function WithdrawPage() {
             className="px-5 py-2 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-700 disabled:text-gray-500 text-black font-semibold rounded text-sm transition-colors"
           >
             출금 신청
-          </button>
+          </ActionButton>
         </div>
       </div>
 

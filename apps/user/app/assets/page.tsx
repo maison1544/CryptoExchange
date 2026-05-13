@@ -2,6 +2,7 @@
 
 import { AppLayout } from "@/components/layout/AppLayout";
 import { UserModal } from "@/components/ui/UserModal";
+import { ActionButton } from "@/components/ui/ActionButton";
 import {
   UserEmptyState,
   UserMetricCard,
@@ -584,7 +585,7 @@ export default function AssetsPage() {
               >
                 취소
               </button>
-              <button
+              <ActionButton
                 onClick={async () => {
                   const amt = Number(transferAmount);
                   if (!amt || amt <= 0) {
@@ -638,7 +639,7 @@ export default function AssetsPage() {
                 className="flex-1 rounded-full bg-yellow-500 py-2.5 text-sm font-semibold text-black transition-colors hover:bg-yellow-400"
               >
                 전환하기
-              </button>
+              </ActionButton>
             </div>
           }
         >
