@@ -16,7 +16,7 @@ export type WithdrawalSettings = {
 
 export const defaultWithdrawalSettings: WithdrawalSettings = {
   withdrawFee: 0,
-  minWithdraw: 10000,
+  minWithdraw: 10,
   dailyMaxWithdraw: 0,
   singleMaxWithdraw: 0,
 };

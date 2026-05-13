@@ -19,7 +19,7 @@ import {
   formatKrw,
   formatUsdt,
 } from "@/lib/utils/numberFormat";
-import { convertKrwToUsdt } from "@/lib/utils/siteSettings";
+import { convertUsdtToKrw } from "@/lib/utils/siteSettings";
 
 // ── 상태 텍스트 / 색상 ──────────────────────────────────────────────────
 function statusLabel(status: string, type: "deposit" | "withdrawal") {
@@ -62,19 +62,19 @@ function statusColor(status: string) {
 
 function formatInteger(value: number) {
   return formatDisplayNumber(value, {
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 2,
   });
 }
 
 function formatWalletBalance(value: number) {
-  return formatKrw(value);
-}
-
-function formatEstimatedUsdtFromKrw(value: number, usdtKrwRate: number) {
-  return formatUsdt(convertKrwToUsdt(value, usdtKrwRate), {
+  return formatUsdt(value, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function formatEstimatedKrwFromUsdt(value: number, usdtKrwRate: number) {
+  return formatKrw(convertUsdtToKrw(value, usdtKrwRate));
 }
 
 // ── 확인 모달 ────────────────────────────────────────────────────────────
@@ -232,18 +232,23 @@ export default function WalletPage() {
     setNum: (n: number) => void,
     setText: (s: string) => void,
   ) => {
-    const cleaned = value.replace(/[^0-9]/g, "");
-    const numeric = cleaned ? Number(cleaned) : 0;
-    setNum(numeric);
-    setText(numeric ? formatInteger(numeric) : "");
+    const cleaned = value.replace(/[^0-9.]/g, "");
+    // Allow only one decimal point
+    const parts = cleaned.split(".");
+    const normalized =
+      parts.length > 1 ? `${parts[0]}.${parts.slice(1).join("")}` : cleaned;
+    const numeric = normalized ? Number(normalized) : 0;
+    setNum(Number.isFinite(numeric) ? numeric : 0);
+    setText(normalized);
   };
 
   // ── 입금 신청 ─────────────────────────────────────────────────────────
+  const MIN_DEPOSIT_USDT = 10;
   const handleCreateDeposit = () => {
-    if (depositAmount < 10000) {
+    if (depositAmount < MIN_DEPOSIT_USDT) {
       addToast({
         title: "입금 신청 불가",
-        message: "입금은 최소 10,000원부터 가능합니다.",
+        message: `입금은 최소 ${formatUsdt(MIN_DEPOSIT_USDT, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}부터 가능합니다.`,
         type: "warning",
       });
       return;
@@ -254,12 +259,12 @@ export default function WalletPage() {
       rows: [
         {
           label: "입금 금액",
-          value: formatKrw(depositAmount),
+          value: formatWalletBalance(depositAmount),
           highlight: true,
         },
         {
-          label: "환산 USDT",
-          value: formatEstimatedUsdtFromKrw(depositAmount, usdtKrwRate),
+          label: "환산 KRW",
+          value: formatEstimatedKrwFromUsdt(depositAmount, usdtKrwRate),
         },
         {
           label: "입금자명",
@@ -301,7 +306,7 @@ export default function WalletPage() {
     if (withdrawAmount < minimumWithdraw) {
       addToast({
         title: "출금 신청 불가",
-        message: `출금은 최소 ${formatKrw(minimumWithdraw)}부터 가능합니다.`,
+        message: `출금은 최소 ${formatWalletBalance(minimumWithdraw)}부터 가능합니다.`,
         type: "warning",
       });
       return;
@@ -309,7 +314,7 @@ export default function WalletPage() {
     if (exceedsSingleLimit) {
       addToast({
         title: "출금 신청 불가",
-        message: `1회 최대 출금 한도는 ${formatKrw(singleMaxWithdraw)}입니다.`,
+        message: `1회 최대 출금 한도는 ${formatWalletBalance(singleMaxWithdraw)}입니다.`,
         type: "error",
       });
       return;
@@ -340,15 +345,15 @@ export default function WalletPage() {
       rows: [
         {
           label: "출금 신청액",
-          value: `${formatKrw(withdrawAmount)} / ${formatEstimatedUsdtFromKrw(withdrawAmount, usdtKrwRate)}`,
+          value: `${formatWalletBalance(withdrawAmount)} / ${formatEstimatedKrwFromUsdt(withdrawAmount, usdtKrwRate)}`,
         },
         {
           label: "출금 수수료",
-          value: `${formatKrw(withdrawFee)} / ${formatEstimatedUsdtFromKrw(withdrawFee, usdtKrwRate)}`,
+          value: `${formatWalletBalance(withdrawFee)} / ${formatEstimatedKrwFromUsdt(withdrawFee, usdtKrwRate)}`,
         },
         {
           label: "실차감액",
-          value: `${formatKrw(totalDeduction)} / ${formatEstimatedUsdtFromKrw(totalDeduction, usdtKrwRate)}`,
+          value: `${formatWalletBalance(totalDeduction)} / ${formatEstimatedKrwFromUsdt(totalDeduction, usdtKrwRate)}`,
           highlight: true,
         },
       ],
@@ -379,7 +384,7 @@ export default function WalletPage() {
         setConfirmModal(null);
         addToast({
           title: "출금 신청 완료",
-          message: `관리자 승인 후 처리됩니다. 실차감액 ${formatKrw(Number(result.deductedAmount ?? totalDeduction))} (${formatEstimatedUsdtFromKrw(Number(result.deductedAmount ?? totalDeduction), usdtKrwRate)})`,
+          message: `관리자 승인 후 처리됩니다. 실차감액 ${formatWalletBalance(Number(result.deductedAmount ?? totalDeduction))} (${formatEstimatedKrwFromUsdt(Number(result.deductedAmount ?? totalDeduction), usdtKrwRate)})`,
           type: "success",
         });
       },
@@ -401,13 +406,13 @@ export default function WalletPage() {
               label="보유 잔액"
               tone="warning"
               value={formatWalletBalance(currentPoints)}
-              subvalue={`≈ ${formatEstimatedUsdtFromKrw(currentPoints, usdtKrwRate)}`}
+              subvalue={`≈ ${formatEstimatedKrwFromUsdt(currentPoints, usdtKrwRate)}`}
             />
             <UserMetricCard
               label="출금 가능 금액"
               tone="default"
               value={formatWalletBalance(availableBalance)}
-              subvalue={`≈ ${formatEstimatedUsdtFromKrw(availableBalance, usdtKrwRate)}`}
+              subvalue={`≈ ${formatEstimatedKrwFromUsdt(availableBalance, usdtKrwRate)}`}
             />
           </div>
 
@@ -465,7 +470,7 @@ export default function WalletPage() {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-gray-400 mb-1.5">
-                        입금 금액 (최소 10,000원)
+                        입금 금액 (최소 10 USDT)
                       </label>
                       <div className="relative">
                         <input
@@ -479,36 +484,36 @@ export default function WalletPage() {
                             )
                           }
                           placeholder="0"
-                          className="w-full rounded-2xl border border-white/8 bg-white/3 px-4 py-3 text-right text-white focus:border-yellow-500/50 focus:bg-white/4 focus:outline-none pr-10"
+                          className="w-full rounded-2xl border border-white/8 bg-white/3 px-4 py-3 text-right text-white focus:border-yellow-500/50 focus:bg-white/4 focus:outline-none pr-14"
                         />
                         <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">
-                          원
+                          USDT
                         </span>
                       </div>
                       {depositAmount > 0 && (
                         <p className="text-xs text-gray-500 mt-1 text-right">
                           ≈{" "}
-                          {formatEstimatedUsdtFromKrw(
+                          {formatEstimatedKrwFromUsdt(
                             depositAmount,
                             usdtKrwRate,
                           )}
                         </p>
                       )}
-                      {depositAmount > 0 && depositAmount < 10000 && (
+                      {depositAmount > 0 && depositAmount < 10 && (
                         <p className="text-xs text-red-400 mt-1">
-                          최소 10,000원부터 입금 가능합니다.
+                          최소 10 USDT부터 입금 가능합니다.
                         </p>
                       )}
                     </div>
 
                     {/* 빠른 금액 선택 */}
                     <div className="grid grid-cols-4 gap-2">
-                      {[10000, 30000, 50000, 100000].map((amt) => (
+                      {[10, 100, 500, 1000].map((amt) => (
                         <button
                           key={amt}
                           onClick={() => {
                             setDepositAmount(amt);
-                            setDepositAmountText(formatInteger(amt));
+                            setDepositAmountText(String(amt));
                           }}
                           className={cn(
                             "rounded-xl border py-2.5 text-xs transition-colors",
@@ -517,7 +522,7 @@ export default function WalletPage() {
                               : "border-white/8 bg-white/3 text-gray-300 hover:bg-white/5 hover:text-white",
                           )}
                         >
-                          {formatInteger(amt / 10000)}만원
+                          {formatInteger(amt)} USDT
                         </button>
                       ))}
                     </div>
@@ -593,9 +598,9 @@ export default function WalletPage() {
                                   {item.date}
                                 </td>
                                 <td className="px-4 py-3 font-medium text-green-400 text-right">
-                                  {formatKrw(item.amount)}
+                                  {formatWalletBalance(item.amount)}
                                   <p className="text-[11px] text-gray-500 mt-1">
-                                    {formatEstimatedUsdtFromKrw(
+                                    {formatEstimatedKrwFromUsdt(
                                       item.amount,
                                       usdtKrwRate,
                                     )}
@@ -632,11 +637,11 @@ export default function WalletPage() {
                     <div>
                       <label className="flex text-gray-400 mb-1.5 justify-between">
                         <span>
-                          출금 금액 (최소 {formatKrw(minimumWithdraw)})
+                          출금 금액 (최소 {formatWalletBalance(minimumWithdraw)})
                         </span>
                         <span className="text-yellow-500">
                           사용 가능: {formatWalletBalance(availableBalance)} /{" "}
-                          {formatEstimatedUsdtFromKrw(
+                          {formatEstimatedKrwFromUsdt(
                             availableBalance,
                             usdtKrwRate,
                           )}
@@ -654,16 +659,16 @@ export default function WalletPage() {
                             )
                           }
                           placeholder="0"
-                          className="w-full rounded-2xl border border-white/8 bg-white/3 px-4 py-3 pr-8 text-right text-white focus:border-yellow-500/50 focus:bg-white/4 focus:outline-none"
+                          className="w-full rounded-2xl border border-white/8 bg-white/3 px-4 py-3 pr-14 text-right text-white focus:border-yellow-500/50 focus:bg-white/4 focus:outline-none"
                         />
                         <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">
-                          원
+                          USDT
                         </span>
                       </div>
                       {withdrawAmount > 0 && (
                         <p className="text-xs text-gray-500 mt-1 text-right">
                           ≈{" "}
-                          {formatEstimatedUsdtFromKrw(
+                          {formatEstimatedKrwFromUsdt(
                             withdrawAmount,
                             usdtKrwRate,
                           )}
@@ -672,13 +677,13 @@ export default function WalletPage() {
                       {withdrawAmount > 0 &&
                         withdrawAmount < minimumWithdraw && (
                           <p className="text-xs text-red-400 mt-1">
-                            최소 {formatKrw(minimumWithdraw)}
+                            최소 {formatWalletBalance(minimumWithdraw)}
                             부터 출금 가능합니다.
                           </p>
                         )}
                       {exceedsSingleLimit && (
                         <p className="text-xs text-red-400 mt-1">
-                          1회 최대 출금 한도는 {formatKrw(singleMaxWithdraw)}
+                          1회 최대 출금 한도는 {formatWalletBalance(singleMaxWithdraw)}
                           입니다.
                         </p>
                       )}
@@ -693,19 +698,19 @@ export default function WalletPage() {
                       <div className="rounded-lg border border-gray-800 bg-[#0d1117] px-4 py-3">
                         <p className="text-gray-500 mb-1">출금 수수료</p>
                         <p className="font-semibold text-white">
-                          {formatKrw(withdrawFee)}
+                          {formatWalletBalance(withdrawFee)}
                         </p>
                         <p className="text-[11px] text-gray-500 mt-1">
-                          {formatEstimatedUsdtFromKrw(withdrawFee, usdtKrwRate)}
+                          {formatEstimatedKrwFromUsdt(withdrawFee, usdtKrwRate)}
                         </p>
                       </div>
                       <div className="rounded-lg border border-gray-800 bg-[#0d1117] px-4 py-3">
                         <p className="text-gray-500 mb-1">실차감액</p>
                         <p className="font-semibold text-yellow-500">
-                          {formatKrw(totalDeduction)}
+                          {formatWalletBalance(totalDeduction)}
                         </p>
                         <p className="text-[11px] text-gray-500 mt-1">
-                          {formatEstimatedUsdtFromKrw(
+                          {formatEstimatedKrwFromUsdt(
                             totalDeduction,
                             usdtKrwRate,
                           )}
@@ -715,12 +720,12 @@ export default function WalletPage() {
                         <p className="text-gray-500 mb-1">1회 최대 한도</p>
                         <p className="font-semibold text-white">
                           {singleMaxWithdraw > 0
-                            ? formatKrw(singleMaxWithdraw)
+                            ? formatWalletBalance(singleMaxWithdraw)
                             : "제한 없음"}
                         </p>
                         <p className="text-[11px] text-gray-500 mt-1">
                           {singleMaxWithdraw > 0
-                            ? formatEstimatedUsdtFromKrw(
+                            ? formatEstimatedKrwFromUsdt(
                                 singleMaxWithdraw,
                                 usdtKrwRate,
                               )
@@ -731,12 +736,12 @@ export default function WalletPage() {
 
                     {/* 빠른 금액 선택 */}
                     <div className="grid grid-cols-4 gap-2">
-                      {[10000, 30000, 50000, 100000].map((amt) => (
+                      {[10, 100, 500, 1000].map((amt) => (
                         <button
                           key={amt}
                           onClick={() => {
                             setWithdrawAmount(amt);
-                            setWithdrawAmountText(formatInteger(amt));
+                            setWithdrawAmountText(String(amt));
                           }}
                           className={cn(
                             "rounded-xl border py-2.5 text-xs transition-colors",
@@ -745,7 +750,7 @@ export default function WalletPage() {
                               : "border-white/8 bg-white/3 text-gray-300 hover:bg-white/5 hover:text-white",
                           )}
                         >
-                          {formatInteger(amt / 10000)}만
+                          {formatInteger(amt)} USDT
                         </button>
                       ))}
                     </div>
@@ -830,17 +835,17 @@ export default function WalletPage() {
                                   {item.date}
                                 </td>
                                 <td className="px-4 py-3 font-medium text-red-400 text-right">
-                                  {formatKrw(-(item.amount + item.fee))}
+                                  -{formatWalletBalance(item.amount + item.fee)}
                                   <p className="text-[11px] text-gray-500 mt-1">
-                                    {formatEstimatedUsdtFromKrw(
+                                    {formatEstimatedKrwFromUsdt(
                                       item.amount + item.fee,
                                       usdtKrwRate,
                                     )}
                                   </p>
                                   {item.fee > 0 && (
                                     <p className="text-[11px] text-gray-500 mt-1">
-                                      신청액 {formatKrw(item.amount)} + 수수료{" "}
-                                      {formatKrw(item.fee)}
+                                      신청액 {formatWalletBalance(item.amount)} + 수수료{" "}
+                                      {formatWalletBalance(item.fee)}
                                     </p>
                                   )}
                                 </td>
