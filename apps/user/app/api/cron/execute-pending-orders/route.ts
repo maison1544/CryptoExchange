@@ -23,16 +23,27 @@ export const dynamic = "force-dynamic";
 // where Binance is reachable.
 export const preferredRegion = ["hnd1", "sin1", "icn1", "fra1"];
 
-// Both Binance fapi (HTTP 451) and Bybit (HTTP 403) explicitly
-// geo-block requests originating from Vercel's iad1 (US-East) data
-// centers, and Vercel cron jobs ignore the preferredRegion hint on
-// the current plan. Binance.US is the US-compliant subsidiary of
-// Binance and accepts requests from US cloud IPs; the symbol naming
-// (BTCUSDT, ETHUSDT, ...) and kline response shape are identical to
-// Binance global, so swapping only the URL base is enough. The
-// Binance.US spot market price tracks the BTCUSDT-perp price closely
-// enough for limit-order matching purposes (basis is sub-bps).
+// Data-source fallback chain. Binance fapi (HTTP 451) and Bybit
+// (HTTP 403) explicitly geo-block Vercel's iad1 data center, and
+// Vercel cron jobs ignore the preferredRegion hint on the current
+// plan. We try OKX's USDT-SWAP kline endpoint first (perp price,
+// closest match to what the user sees in the order panel), and fall
+// back to Binance.US spot if OKX is unreachable. Symbol mapping:
+//   - OKX:        "BTCUSDT" -> "BTC-USDT-SWAP"
+//   - Binance.US: "BTCUSDT" -> "BTCUSDT" (spot, same naming)
+const OKX_REST_URL = "https://www.okx.com";
 const BINANCE_US_REST_URL = "https://api.binance.us";
+
+function okxInstId(symbol: string): string {
+  // BTCUSDT -> BTC-USDT-SWAP, ETHUSDT -> ETH-USDT-SWAP, etc.
+  if (symbol.endsWith("USDT")) {
+    return `${symbol.slice(0, -4)}-USDT-SWAP`;
+  }
+  if (symbol.endsWith("USD")) {
+    return `${symbol.slice(0, -3)}-USD-SWAP`;
+  }
+  return symbol;
+}
 
 type PendingOrder = {
   id: number;
@@ -89,95 +100,199 @@ type SymbolPriceWindow = {
 };
 
 /**
- * Fetch the last few 1m klines for a symbol from Binance Futures and return
- * the aggregated high/low/last across the klines whose close time falls on
- * or after `cutoffMs`. Returns null if Binance is unreachable.
- *
- * Using klines instead of a single premiumIndex snapshot is what allows a
- * once-per-minute cron to still match limit orders that only touched their
- * trigger price during a brief intra-minute wick.
+ * Reduce an array of normalised klines into a `SymbolPriceWindow` honouring
+ * the cutoff. Used by both the OKX and Binance.US fetch helpers so the
+ * wick-detection logic stays identical regardless of the upstream source.
  */
+function aggregateKlines(
+  klines: Array<{
+    startTime: number;
+    closeTime: number;
+    high: number;
+    low: number;
+    close: number;
+  }>,
+  cutoffMs: number,
+): SymbolPriceWindow | null {
+  let highSinceCutoff = -Infinity;
+  let lowSinceCutoff = Infinity;
+  let newestStart = 0;
+  let newestClose = 0;
+  for (const k of klines) {
+    if (Number.isFinite(k.close) && k.close > 0 && k.startTime > newestStart) {
+      newestStart = k.startTime;
+      newestClose = k.close;
+    }
+    if (k.closeTime < cutoffMs) continue;
+    if (Number.isFinite(k.high) && k.high > highSinceCutoff) {
+      highSinceCutoff = k.high;
+    }
+    if (Number.isFinite(k.low) && k.low > 0 && k.low < lowSinceCutoff) {
+      lowSinceCutoff = k.low;
+    }
+  }
+  if (
+    !Number.isFinite(highSinceCutoff) ||
+    !Number.isFinite(lowSinceCutoff) ||
+    lowSinceCutoff <= 0
+  ) {
+    return null;
+  }
+  return {
+    lastPrice: newestClose > 0 ? newestClose : highSinceCutoff,
+    highSinceCutoff,
+    lowSinceCutoff,
+  };
+}
+
+async function fetchFromOkx(
+  symbol: string,
+  klineLimit: number,
+): Promise<{
+  klines: Array<{
+    startTime: number;
+    closeTime: number;
+    high: number;
+    low: number;
+    close: number;
+  }> | null;
+  error?: string;
+}> {
+  try {
+    const instId = okxInstId(symbol);
+    // OKX v5 candles. Response shape:
+    //   { code: "0", data: [ [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm], ... ] }
+    // List sorted DESC by ts; ts is the kline start in ms.
+    // OKX limit max = 300 per request.
+    const limit = Math.min(klineLimit, 300);
+    const response = await fetch(
+      `${OKX_REST_URL}/api/v5/market/candles?instId=${encodeURIComponent(
+        instId,
+      )}&bar=1m&limit=${limit}`,
+      { cache: "no-store", signal: AbortSignal.timeout(5000) },
+    );
+    if (!response.ok) {
+      return { klines: null, error: `okx_http_${response.status}` };
+    }
+    const payload = (await response.json()) as {
+      code?: string;
+      msg?: string;
+      data?: unknown[];
+    };
+    if (payload.code !== undefined && payload.code !== "0") {
+      return {
+        klines: null,
+        error: `okx_code_${payload.code}_${payload.msg ?? ""}`,
+      };
+    }
+    if (!Array.isArray(payload.data) || payload.data.length === 0) {
+      return { klines: null, error: "okx_empty_rows" };
+    }
+    const klines = payload.data
+      .map((row) => {
+        if (!Array.isArray(row) || row.length < 5) return null;
+        const startTime = Number(row[0]);
+        return {
+          startTime,
+          closeTime: startTime + 60_000,
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+        };
+      })
+      .filter((k): k is NonNullable<typeof k> => k !== null);
+    return { klines };
+  } catch (err) {
+    return {
+      klines: null,
+      error: err instanceof Error ? err.message : "okx_threw",
+    };
+  }
+}
+
+async function fetchFromBinanceUs(
+  symbol: string,
+  klineLimit: number,
+): Promise<{
+  klines: Array<{
+    startTime: number;
+    closeTime: number;
+    high: number;
+    low: number;
+    close: number;
+  }> | null;
+  error?: string;
+}> {
+  try {
+    const limit = Math.min(klineLimit, 1000);
+    const response = await fetch(
+      `${BINANCE_US_REST_URL}/api/v3/klines?symbol=${encodeURIComponent(
+        symbol,
+      )}&interval=1m&limit=${limit}`,
+      { cache: "no-store", signal: AbortSignal.timeout(5000) },
+    );
+    if (!response.ok) {
+      return { klines: null, error: `binance_us_http_${response.status}` };
+    }
+    const rows = (await response.json()) as unknown[];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { klines: null, error: "binance_us_empty_rows" };
+    }
+    const klines = rows
+      .map((row) => {
+        if (!Array.isArray(row) || row.length < 7) return null;
+        return {
+          startTime: Number(row[0]),
+          closeTime: Number(row[6]),
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+        };
+      })
+      .filter((k): k is NonNullable<typeof k> => k !== null);
+    return { klines };
+  } catch (err) {
+    return {
+      klines: null,
+      error: err instanceof Error ? err.message : "binance_us_threw",
+    };
+  }
+}
+
 async function fetchSymbolPriceWindow(
   symbol: string,
   cutoffMs: number,
 ): Promise<{ window: SymbolPriceWindow | null; error?: string }> {
-  try {
-    // Dynamic limit: we need enough 1m candles to cover [cutoffMs, now] so
-    // that a long-standing pending order still has its full price history
-    // scanned for a wick that touched the limit. +2 minutes safety margin,
-    // clamped to Binance.US's permitted [1, 1000] range.
-    const minutesNeeded =
-      Math.ceil(Math.max(0, Date.now() - cutoffMs) / 60_000) + 2;
-    const klineLimit = Math.min(Math.max(minutesNeeded, 3), 1000);
+  // Dynamic limit: we need enough 1m candles to cover [cutoffMs, now] so a
+  // long-standing pending order still has its full price history scanned
+  // for a wick that touched the limit. +2 minutes safety margin.
+  const minutesNeeded =
+    Math.ceil(Math.max(0, Date.now() - cutoffMs) / 60_000) + 2;
+  const klineLimit = Math.max(minutesNeeded, 3);
 
-    // Binance.US spot klines.
-    // Response shape (identical to Binance global):
-    //   [ [ openTime, open, high, low, close, volume, closeTime, ... ], ... ]
-    // The list is returned oldest-first; openTime / closeTime are ms.
-    const response = await fetch(
-      `${BINANCE_US_REST_URL}/api/v3/klines?symbol=${encodeURIComponent(
-        symbol,
-      )}&interval=1m&limit=${klineLimit}`,
-      { cache: "no-store", signal: AbortSignal.timeout(5000) },
-    );
-    if (!response.ok) {
-      return { window: null, error: `binance_us_http_${response.status}` };
-    }
-    const rows = (await response.json()) as unknown[];
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { window: null, error: "binance_us_empty_rows" };
-    }
-
-    let highSinceCutoff = -Infinity;
-    let lowSinceCutoff = Infinity;
-    let lastPrice = 0;
-
-    for (const row of rows) {
-      if (!Array.isArray(row) || row.length < 7) continue;
-      const closeTime = Number(row[6]);
-      const high = Number(row[2]);
-      const low = Number(row[3]);
-      const close = Number(row[4]);
-      if (!Number.isFinite(closeTime)) continue;
-
-      // Track the last traded close across the window for `lastPrice`.
-      if (Number.isFinite(close) && close > 0) {
-        lastPrice = close;
-      }
-
-      // Only consider klines that ended at-or-after the cutoff. The
-      // in-progress kline (closeTime in the future) always qualifies.
-      if (closeTime < cutoffMs) continue;
-
-      if (Number.isFinite(high) && high > highSinceCutoff) {
-        highSinceCutoff = high;
-      }
-      if (Number.isFinite(low) && low > 0 && low < lowSinceCutoff) {
-        lowSinceCutoff = low;
-      }
-    }
-
-    if (
-      !Number.isFinite(highSinceCutoff) ||
-      !Number.isFinite(lowSinceCutoff) ||
-      lowSinceCutoff <= 0
-    ) {
-      return { window: null, error: "no_kline_in_cutoff_window" };
-    }
-
-    return {
-      window: {
-        lastPrice: lastPrice > 0 ? lastPrice : highSinceCutoff,
-        highSinceCutoff,
-        lowSinceCutoff,
-      },
-    };
-  } catch (err) {
-    return {
-      window: null,
-      error: err instanceof Error ? err.message : "fetch_threw",
-    };
+  // Primary: OKX perpetual swap (matches what the user sees in the
+  // futures order panel). Falls back to Binance.US spot if OKX
+  // rejects the request from Vercel's IP.
+  const okx = await fetchFromOkx(symbol, klineLimit);
+  if (okx.klines) {
+    const window = aggregateKlines(okx.klines, cutoffMs);
+    if (window) return { window };
+    return { window: null, error: "okx_no_kline_in_cutoff_window" };
   }
+
+  const fallback = await fetchFromBinanceUs(symbol, klineLimit);
+  if (fallback.klines) {
+    const window = aggregateKlines(fallback.klines, cutoffMs);
+    if (window) return { window };
+    return { window: null, error: "binance_us_no_kline_in_cutoff_window" };
+  }
+
+  return {
+    window: null,
+    error: `okx_failed_${okx.error ?? "?"};binance_us_failed_${
+      fallback.error ?? "?"
+    }`,
+  };
 }
 
 export async function GET(req: NextRequest) {
