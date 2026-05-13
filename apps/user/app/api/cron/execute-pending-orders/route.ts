@@ -249,10 +249,25 @@ export async function GET(req: NextRequest) {
   }
 
   if (priceWindowBySymbol.size === 0) {
+    try {
+      await admin.from("cron_diagnostics").insert({
+        job: "execute_pending_orders",
+        payload: {
+          phase: "no_fresh_price_window",
+          symbols_attempted: distinctSymbols,
+          symbols_with_data: 0,
+          cutoff_ms: cutoffMs,
+          now_ms: nowMs,
+        },
+      });
+    } catch {
+      // ignore
+    }
     return NextResponse.json({
       checked: pendingOrders.length,
       filled: 0,
       warning: "no_fresh_price_window",
+      symbols_attempted: distinctSymbols,
     });
   }
 
