@@ -79,6 +79,14 @@ const WITHDRAWAL_STATUS_OPTIONS = [
   { value: "rejected", label: "거절" },
 ] as const;
 
+const EMPTY_BREAKDOWN = {
+  trade_fee: 0,
+  rolling: 0,
+  loss: 0,
+  staking: 0,
+  deposit: 0,
+} as const;
+
 const EMPTY_SUMMARY: PartnerSummary = {
   id: "",
   name: "",
@@ -95,6 +103,8 @@ const EMPTY_SUMMARY: PartnerSummary = {
   bankName: "",
   bankAccount: "",
   bankAccountHolder: "",
+  commissionBreakdown: { ...EMPTY_BREAKDOWN },
+  monthCommissionBreakdown: { ...EMPTY_BREAKDOWN },
 };
 
 function commissionToneClass(typeLabel: string) {
@@ -578,6 +588,32 @@ export function PartnerClientPage() {
                   value={`${summary.feeCommission}%`}
                   valueClassName="text-2xl font-bold text-white"
                   meta="거래 수수료 기준"
+                />
+              </div>
+            </AdminCard>
+
+            <AdminCard title="커미션 종류별 누적 정산">
+              <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-3">
+                <AdminSummaryCard
+                  className="border-red-500/20! bg-red-500/5!"
+                  label="죽장 커미션"
+                  value={formatUsdt(summary.commissionBreakdown.loss)}
+                  valueClassName="text-2xl font-bold text-red-300"
+                  meta={`이번 달 ${formatUsdt(summary.monthCommissionBreakdown.loss)}`}
+                />
+                <AdminSummaryCard
+                  className="border-yellow-500/20! bg-yellow-500/5!"
+                  label="롤링 커미션"
+                  value={formatUsdt(summary.commissionBreakdown.rolling)}
+                  valueClassName="text-2xl font-bold text-yellow-300"
+                  meta={`이번 달 ${formatUsdt(summary.monthCommissionBreakdown.rolling)}`}
+                />
+                <AdminSummaryCard
+                  className="border-sky-500/20! bg-sky-500/5!"
+                  label="수수료 커미션"
+                  value={formatUsdt(summary.commissionBreakdown.trade_fee)}
+                  valueClassName="text-2xl font-bold text-sky-300"
+                  meta={`이번 달 ${formatUsdt(summary.monthCommissionBreakdown.trade_fee)}`}
                 />
               </div>
             </AdminCard>
@@ -1193,7 +1229,7 @@ export function PartnerClientPage() {
 
                     <AdminPagination
                       currentPage={withdrawPage}
-                      totalPages={withdrawTotalPages}
+                      totalPages={withdrawTotalCount > 0 ? withdrawTotalPages : 1}
                       totalCount={withdrawTotalCount}
                       pageSize={PAGE_SIZE}
                       onPageChange={setWithdrawPage}
