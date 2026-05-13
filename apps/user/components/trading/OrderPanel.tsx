@@ -26,7 +26,13 @@ const LEV_PRESETS = [5, 10, 25, 50] as const;
 
 interface OrderPanelProps {
   currentPrice: number | null;
+  /**
+   * Price selected by the user in the order book. Pair this with
+   * `orderPriceTick` so that clicking the same price twice still re-applies
+   * the value (the tick should increment on every click).
+   */
   orderPrice: number | null;
+  orderPriceTick?: number;
   symbol: string;
   ticker: BinanceTickerData | null;
   onAddPosition: (pos: Position) => void;
@@ -87,6 +93,8 @@ function getTradePriceInputDigits(value: number) {
 
 export function OrderPanel({
   currentPrice,
+  orderPrice,
+  orderPriceTick,
   symbol,
   onAddPosition,
 }: OrderPanelProps) {
@@ -173,6 +181,10 @@ export function OrderPanel({
     return () => clearInterval(interval);
   }, [loadAccountSnapshot, user]);
 
+  // When switching into limit mode, auto-fill the price with the current
+  // market price if the user has not typed one yet. This avoids the case where
+  // the field stays empty (or holds a stale tiny value) and produces an
+  // unrealistically large position size on confirm.
   useEffect(() => {
     if (
       orderType === "limit" &&
@@ -185,6 +197,22 @@ export function OrderPanel({
       );
     }
   }, [currentPrice, orderType, priceInput]);
+
+  // When the user clicks a price in the order book, jump into limit mode and
+  // load that exact price into the price input. We key the effect on the
+  // monotonically-increasing `orderPriceTick` so that re-clicking the same
+  // price still triggers a sync.
+  useEffect(() => {
+    if (orderPriceTick === undefined) return;
+    if (orderPrice == null || !Number.isFinite(orderPrice) || orderPrice <= 0) {
+      return;
+    }
+    setOrderType("limit");
+    setPriceInput(
+      formatPlainInput(orderPrice, getTradePriceInputDigits(orderPrice)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderPriceTick]);
 
   const crossPositionsForRisk = useMemo(
     () => openPositionsForRisk.filter((p) => p.marginMode !== "isolated"),
@@ -206,6 +234,20 @@ export function OrderPanel({
     orderType === "limit"
       ? Number(priceInput.replace(/,/g, "")) || 0
       : (currentPrice ?? 0);
+
+  // Warn the user when a limit price differs from the live market price by
+  // more than 10%. This is the typical "fat-finger" guard exchanges show, and
+  // it directly prevents the case where a hand-typed price like 200 USDT for
+  // BTC (vs. market ~65,000 USDT) produces an absurd 49 BTC quantity.
+  const priceDeviationPercent =
+    orderType === "limit" &&
+    effectivePrice > 0 &&
+    currentPrice &&
+    currentPrice > 0
+      ? ((effectivePrice - currentPrice) / currentPrice) * 100
+      : null;
+  const priceDeviationWarning =
+    priceDeviationPercent != null && Math.abs(priceDeviationPercent) >= 10;
   const qtyNum = Number(qty.replace(/,/g, "")) || 0;
   const positionValue = effectivePrice * qtyNum;
   const margin = useMemo(() => {
@@ -609,28 +651,48 @@ export function OrderPanel({
           )}
         </div>
 
-        <div className="flex items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 p-2.5">
-          <span className="w-14 shrink-0 whitespace-nowrap text-xs text-gray-500">
-            가격
-          </span>
-          <input
-            type="text"
-            className="min-w-0 flex-1 bg-transparent text-right text-sm text-white outline-none"
-            value={
-              orderType === "market"
-                ? effectivePrice > 0
-                  ? formatTradePrice(effectivePrice)
-                  : "-"
-                : priceInput
-            }
-            onChange={(e) => setPriceInput(e.target.value)}
-            readOnly={orderType === "market"}
-            disabled={orderType === "market" || !isLoggedIn || orderLoading}
-            placeholder={orderType === "market" ? "-" : "0.00"}
-          />
-          <span className="ml-1 shrink-0 whitespace-nowrap text-xs text-gray-500">
-            USDT
-          </span>
+        <div>
+          <div
+            className={cn(
+              "flex items-center gap-3 rounded-lg border bg-gray-900 p-2.5",
+              priceDeviationWarning
+                ? "border-yellow-500/60"
+                : "border-gray-800",
+            )}
+          >
+            <span className="w-14 shrink-0 whitespace-nowrap text-xs text-gray-500">
+              가격
+            </span>
+            <input
+              type="text"
+              className="min-w-0 flex-1 bg-transparent text-right text-sm text-white outline-none"
+              value={
+                orderType === "market"
+                  ? effectivePrice > 0
+                    ? formatTradePrice(effectivePrice)
+                    : "-"
+                  : priceInput
+              }
+              onChange={(e) => setPriceInput(e.target.value)}
+              readOnly={orderType === "market"}
+              disabled={orderType === "market" || !isLoggedIn || orderLoading}
+              placeholder={orderType === "market" ? "-" : "0.00"}
+            />
+            <span className="ml-1 shrink-0 whitespace-nowrap text-xs text-gray-500">
+              USDT
+            </span>
+          </div>
+          {priceDeviationWarning && priceDeviationPercent != null && (
+            <p className="mt-1 text-[10px] text-yellow-400">
+              ⚠ 시장가({currentPrice ? formatTradePrice(currentPrice) : "-"} USDT) 대비{" "}
+              {formatDisplayNumber(priceDeviationPercent, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+                signed: true,
+              })}
+              % 차이가 있습니다. 가격을 다시 확인해주세요.
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 p-2.5 focus-within:border-yellow-500/50">

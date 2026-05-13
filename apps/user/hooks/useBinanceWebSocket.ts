@@ -182,6 +182,8 @@ export function useBinanceWebSocket({
   const [markPrice, setMarkPrice] = useState<BinanceMarkPriceData | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
+  const wsReceivedDataRef = useRef(false);
+
   const stopFallbackPolling = useCallback(() => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
@@ -253,31 +255,40 @@ export function useBinanceWebSocket({
     }, FALLBACK_POLL_INTERVAL);
   }, [enabled, fetchFallbackData, symbol]);
 
-  const handleMessage = useCallback((event: MessageEvent) => {
-    try {
-      const parsed = JSON.parse(event.data);
-      if (!parsed.stream || !parsed.data) return;
+  const handleMessage = useCallback(
+    (event: MessageEvent) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        if (!parsed.stream || !parsed.data) return;
 
-      const stream: string = parsed.stream;
-      const data = parsed.data;
+        const stream: string = parsed.stream;
+        const data = parsed.data;
 
-      if (stream.includes("@ticker")) {
-        const tickerData = parseTickerData(data);
-        setTicker(tickerData);
-      } else if (stream.includes("@depth")) {
-        const obData = parseOrderBookData(data);
-        setOrderBook(obData);
-      } else if (stream.includes("@aggTrade")) {
-        const tradeData = parseTradeData(data);
-        setRecentTrades((prev) => [tradeData, ...prev].slice(0, 50));
-      } else if (stream.includes("@markPrice")) {
-        const mpData = parseMarkPriceData(data);
-        setMarkPrice(mpData);
+        if (stream.includes("@ticker")) {
+          const tickerData = parseTickerData(data);
+          setTicker(tickerData);
+        } else if (stream.includes("@depth")) {
+          const obData = parseOrderBookData(data);
+          setOrderBook(obData);
+        } else if (stream.includes("@aggTrade")) {
+          const tradeData = parseTradeData(data);
+          setRecentTrades((prev) => [tradeData, ...prev].slice(0, 50));
+        } else if (stream.includes("@markPrice")) {
+          const mpData = parseMarkPriceData(data);
+          setMarkPrice(mpData);
+        }
+
+        // Once any real WS data flows in, we can stop the REST fallback.
+        if (!wsReceivedDataRef.current) {
+          wsReceivedDataRef.current = true;
+          stopFallbackPolling();
+        }
+      } catch (err) {
+        console.error("[BinanceWS] 메시지 파싱 오류:", err);
       }
-    } catch (err) {
-      console.error("[BinanceWS] 메시지 파싱 오류:", err);
-    }
-  }, []);
+    },
+    [stopFallbackPolling],
+  );
 
   const connect = useCallback(() => {
     if (!enabled || !symbol) return;
@@ -289,9 +300,11 @@ export function useBinanceWebSocket({
       const ws = new WebSocket(url);
 
       ws.onopen = () => {
-        stopFallbackPolling();
         setIsConnected(true);
         reconnectAttemptsRef.current = 0;
+        // Do NOT stop fallback polling here — only stop it when the WS actually
+        // delivers data (handleMessage). Some networks let the WS connect but
+        // silently drop frames; in that case we must keep the REST fallback.
       };
 
       ws.onmessage = handleMessage;
@@ -347,6 +360,12 @@ export function useBinanceWebSocket({
   }, [connect]);
 
   useEffect(() => {
+    // Always kick off REST polling immediately so data is visible within ~1s,
+    // even if the WebSocket handshake is slow or blocked. The WS upgrade will
+    // stop polling as soon as the first live frame arrives.
+    wsReceivedDataRef.current = false;
+    startFallbackPolling();
+
     const timer = setTimeout(() => {
       connect();
     }, 0);
@@ -355,7 +374,7 @@ export function useBinanceWebSocket({
       clearTimeout(timer);
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [connect, disconnect, startFallbackPolling]);
 
   // Reset data when symbol changes
   useEffect(() => {
@@ -364,6 +383,7 @@ export function useBinanceWebSocket({
       setOrderBook(null);
       setRecentTrades([]);
       setMarkPrice(null);
+      wsReceivedDataRef.current = false;
       stopFallbackPolling();
     }, 0);
 

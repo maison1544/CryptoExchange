@@ -11,6 +11,12 @@ interface OrderBookProps {
   currentPrice: number | null;
   prevPrice: number | null;
   isConnected: boolean;
+  /**
+   * Fired when the user clicks a price row in the order book. The parent is
+   * expected to forward this value to the order panel so that it pre-fills
+   * the limit price input.
+   */
+  onSelectPrice?: (price: number) => void;
 }
 
 const DISPLAY_ROWS = 12;
@@ -66,6 +72,7 @@ export function OrderBook({
   currentPrice,
   prevPrice,
   isConnected,
+  onSelectPrice,
 }: OrderBookProps) {
   const [activeTab, setActiveTab] = useState<"호가" | "최근거래">("호가");
 
@@ -134,7 +141,28 @@ export function OrderBook({
               return (
                 <div
                   key={`ask-${i}`}
-                  className="flex justify-between py-0.75 px-2 relative hover:bg-gray-800/40"
+                  onClick={() => onSelectPrice?.(ask.price)}
+                  role={onSelectPrice ? "button" : undefined}
+                  tabIndex={onSelectPrice ? 0 : undefined}
+                  onKeyDown={
+                    onSelectPrice
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelectPrice(ask.price);
+                          }
+                        }
+                      : undefined
+                  }
+                  title={
+                    onSelectPrice
+                      ? "클릭하면 지정가 주문 가격으로 입력됩니다"
+                      : undefined
+                  }
+                  className={cn(
+                    "flex justify-between py-0.75 px-2 relative hover:bg-gray-800/40",
+                    onSelectPrice && "cursor-pointer select-none",
+                  )}
                 >
                   <div
                     className="absolute top-0 right-0 h-full bg-red-500/10 pointer-events-none transition-[width] duration-150"
@@ -155,7 +183,20 @@ export function OrderBook({
           </div>
 
           {/* Current Price */}
-          <div className="py-2 px-3 border-y border-gray-800 flex items-center gap-2">
+          <div
+            onClick={() => currentPrice && onSelectPrice?.(currentPrice)}
+            role={onSelectPrice && currentPrice ? "button" : undefined}
+            tabIndex={onSelectPrice && currentPrice ? 0 : undefined}
+            title={
+              onSelectPrice && currentPrice
+                ? "클릭하면 현재가로 지정가 주문 가격이 채워집니다"
+                : undefined
+            }
+            className={cn(
+              "py-2 px-3 border-y border-gray-800 flex items-center gap-2",
+              onSelectPrice && currentPrice && "cursor-pointer hover:bg-gray-800/40",
+            )}
+          >
             {currentPrice ? (
               <>
                 <span
@@ -187,7 +228,28 @@ export function OrderBook({
               return (
                 <div
                   key={`bid-${i}`}
-                  className="flex justify-between py-0.75 px-2 relative hover:bg-gray-800/40"
+                  onClick={() => onSelectPrice?.(bid.price)}
+                  role={onSelectPrice ? "button" : undefined}
+                  tabIndex={onSelectPrice ? 0 : undefined}
+                  onKeyDown={
+                    onSelectPrice
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelectPrice(bid.price);
+                          }
+                        }
+                      : undefined
+                  }
+                  title={
+                    onSelectPrice
+                      ? "클릭하면 지정가 주문 가격으로 입력됩니다"
+                      : undefined
+                  }
+                  className={cn(
+                    "flex justify-between py-0.75 px-2 relative hover:bg-gray-800/40",
+                    onSelectPrice && "cursor-pointer select-none",
+                  )}
                 >
                   <div
                     className="absolute top-0 right-0 h-full bg-green-500/10 pointer-events-none transition-[width] duration-150"

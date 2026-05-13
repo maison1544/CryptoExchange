@@ -22,6 +22,21 @@ export default function TradePage() {
   const [currentSymbol, setCurrentSymbol] = useState("BTCUSDT");
   const prevPriceRef = useRef<number | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [selectedOrderPrice, setSelectedOrderPrice] = useState<number | null>(
+    null,
+  );
+  const [orderPriceTick, setOrderPriceTick] = useState(0);
+
+  const handleSelectOrderPrice = useCallback((price: number) => {
+    setSelectedOrderPrice(price);
+    setOrderPriceTick((n) => n + 1);
+  }, []);
+
+  // Reset selected price whenever the symbol changes so a previous symbol's
+  // price doesn't leak into the new market's order panel.
+  useEffect(() => {
+    setSelectedOrderPrice(null);
+  }, [currentSymbol]);
 
   const loadPositions = useCallback(async () => {
     if (!user) {
@@ -119,13 +134,15 @@ export default function TradePage() {
                 currentPrice={currentPrice}
                 prevPrice={prevPriceRef.current}
                 isConnected={isConnected}
+                onSelectPrice={handleSelectOrderPrice}
               />
             </div>
             <div className="w-full lg:w-[300px] h-full overflow-hidden">
               {user ? (
                 <OrderPanel
                   currentPrice={currentPrice}
-                  orderPrice={null}
+                  orderPrice={selectedOrderPrice}
+                  orderPriceTick={orderPriceTick}
                   symbol={currentSymbol}
                   ticker={ticker}
                   onAddPosition={handleAddPosition}
