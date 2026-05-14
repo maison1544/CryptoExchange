@@ -1,0 +1,671 @@
+# NEXUS CryptoExchange — 클론 프로덕션 재배포 가이드
+
+> 본 문서는 동일한 코드베이스를 **별도의 Supabase + Vercel 인스턴스**로 한 번에 버그 없이 배포하기 위한 단일 실행 매뉴얼입니다.
+>
+> 평균 작업 시간: **약 90분** (Supabase 마이그레이션 30분 + Edge Functions 배포 15분 + Vercel 셋업 10분 + 검증 30분)
+
+---
+
+## 목차
+
+1. [전체 흐름 개요](#1-전체-흐름-개요)
+2. [사전 준비 체크리스트](#2-사전-준비-체크리스트)
+3. [Step 1 — 소스 클론](#3-step-1--소스-클론)
+4. [Step 2 — Supabase 인스턴스 구축](#4-step-2--supabase-인스턴스-구축)
+5. [Step 3 — 환경 변수 구성](#5-step-3--환경-변수-구성)
+6. [Step 4 — 로컬 검증](#6-step-4--로컬-검증)
+7. [Step 5 — Edge Functions 배포](#7-step-5--edge-functions-배포)
+8. [Step 6 — Vercel 프로젝트 셋업](#8-step-6--vercel-프로젝트-셋업)
+9. [Step 7 — 첫 관리자/파트너 계정 생성](#9-step-7--첫-관리자파트너-계정-생성)
+10. [Step 8 — Production smoke test](#10-step-8--production-smoke-test)
+11. [트러블슈팅 (자주 발생하는 함정)](#11-트러블슈팅-자주-발생하는-함정)
+12. [배포 후 운영 체크](#12-배포-후-운영-체크)
+13. [부록 — 10분 Quick Deploy 체크리스트](#13-부록--10분-quick-deploy-체크리스트)
+
+---
+
+## 1. 전체 흐름 개요
+
+```
+┌──────────────┐   ┌──────────────────┐   ┌───────────────────┐
+│ 1. 소스 클론 │ → │ 2. Supabase 구축 │ → │ 3. 환경 변수 작성 │
+└──────────────┘   └──────────────────┘   └───────────────────┘
+                                                    ↓
+┌──────────────────┐   ┌───────────────────┐   ┌──────────────┐
+│ 6. Vercel 배포   │ ← │ 5. Edge Functions │ ← │ 4. 로컬 검증 │
+└──────────────────┘   └───────────────────┘   └──────────────┘
+        ↓
+┌─────────────────────┐   ┌────────────────────┐
+│ 7. 첫 관리자/파트너 │ → │ 8. Smoke test 완료 │
+└─────────────────────┘   └────────────────────┘
+```
+
+### 핵심 컴포넌트
+
+| 컴포넌트 | 역할 | 위치 |
+|---------|------|------|
+| **Next.js 앱** | 사용자/관리자/파트너 UI + API Routes | `apps/user/` |
+| **Supabase Postgres** | 회원·잔고·거래·커미션 등 모든 도메인 데이터 | Supabase Cloud |
+| **Supabase Auth** | 이메일 로그인 + JWT 세션 | Supabase Cloud |
+| **Edge Functions** | 회원 가입·로그인 기록·외부 호출 처리 (8개) | Supabase Cloud |
+| **Vercel Cron** | `/api/cron/execute-pending-orders` 매분 실행 | Vercel |
+| **GitHub** | 코드 저장 + Vercel 자동 배포 트리거 | GitHub |
+
+---
+
+## 2. 사전 준비 체크리스트
+
+배포를 시작하기 전에 다음 도구와 계정이 준비되어야 합니다.
+
+### 2.1 필수 계정
+
+- [ ] **GitHub 계정** — 코드 호스팅 + Vercel 연동
+- [ ] **Supabase 계정** — https://supabase.com (무료 플랜 가능)
+- [ ] **Vercel 계정** — https://vercel.com (Hobby 플랜으로 시작 가능, 단 Cron은 Pro 필요할 수 있음)
+
+### 2.2 로컬 도구 (Windows / macOS / Linux 동일)
+
+```powershell
+# Node.js 20+ (Next.js 16 호환)
+node --version    # v20.x 이상
+
+# pnpm 9+
+npm install -g pnpm
+pnpm --version    # 9.x 이상
+
+# Supabase CLI
+npm install -g supabase
+supabase --version
+
+# Vercel CLI (선택, 권장)
+npm install -g vercel
+vercel --version
+
+# Git
+git --version
+```
+
+### 2.3 참고 문서
+
+다음 두 가이드를 본 문서와 함께 사용합니다.
+
+| 문서 | 용도 |
+|------|------|
+| `supabase_migration.md` | Supabase 스키마 + RLS + RPC + Edge Functions의 SQL 전문 |
+| `partner_migration.md` | 파트너(에이전트) 모듈 전용 마이그레이션 (이미 supabase_migration.md에 통합되어 있다면 참고용) |
+
+---
+
+## 3. Step 1 — 소스 클론
+
+### 3.1 GitHub 저장소 fork (또는 신규 저장소 생성)
+
+원본 저장소: `https://github.com/maison1544/CryptoExchange`
+
+**옵션 A — fork:**
+
+1. GitHub 저장소 페이지 우상단 **Fork** 클릭
+2. 자신의 계정 / 조직으로 fork
+3. 로컬 클론:
+   ```bash
+   git clone https://github.com/<your-username>/CryptoExchange.git crypto
+   cd crypto
+   ```
+
+**옵션 B — 새 private repo:**
+
+```bash
+git clone https://github.com/maison1544/CryptoExchange.git crypto
+cd crypto
+git remote remove origin
+git remote add origin https://github.com/<your-username>/<new-repo>.git
+git push -u origin master
+```
+
+### 3.2 의존성 설치
+
+루트와 `apps/user` 두 곳에 모두 설치합니다. Vercel은 `--legacy-peer-deps`를 사용하므로 로컬도 동일한 방식 권장:
+
+```bash
+# 루트 설치
+npm install --legacy-peer-deps
+
+# apps/user 설치
+cd apps/user
+npm install --legacy-peer-deps
+cd ../..
+```
+
+또는 pnpm workspace를 사용한다면:
+
+```bash
+pnpm install
+```
+
+> ⚠️ Next.js 16은 React 19 alpha와 peer-dep 충돌이 잦습니다. `--legacy-peer-deps`가 필요한 경우가 있습니다.
+
+---
+
+## 4. Step 2 — Supabase 인스턴스 구축
+
+본 단계는 `supabase_migration.md`의 절차를 그대로 따릅니다. 핵심만 요약하면 다음과 같습니다.
+
+### 4.1 새 Supabase 프로젝트 생성
+
+1. https://supabase.com/dashboard → **New Project**
+2. 프로젝트 이름, DB 비밀번호 (별도 보관!), 리전(가까운 곳) 선택
+3. 프로젝트 생성 후 **Settings → API** 에서 다음 3개 값 복사:
+   - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
+   - `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `service_role` secret key → `SUPABASE_SERVICE_ROLE_KEY` (절대 클라이언트에 노출 금지)
+
+### 4.2 SQL 실행
+
+`supabase_migration.md`의 **Step 1 → Step 9** 를 순서대로 Supabase SQL Editor에 붙여넣어 실행합니다.
+
+| 순서 | 내용 | 소요 시간 |
+|------|------|----------|
+| Step 1 | 확장 모듈 활성화 (`pgcrypto`, `pg_stat_statements`) | 1분 |
+| Step 2 | 17개 테이블 생성 | 3분 |
+| Step 3 | 17개 인덱스 생성 | 1분 |
+| Step 4 | RLS 활성화 + 22개 정책 | 5분 |
+| Step 5 | 13개 RPC 함수 (`SECURITY DEFINER`) | 10분 |
+| Step 6 | Seed 데이터 (코인·서비스·관리자 메뉴 등) | 2분 |
+| Step 9 | 검증 쿼리 (테이블·정책·함수 카운트) | 1분 |
+
+### 4.3 검증 쿼리 (필수)
+
+`supabase_migration.md` Step 9의 다음 쿼리들로 마이그레이션 무결성을 확인:
+
+```sql
+-- 테이블 17개
+SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
+
+-- RLS 활성화된 테이블 17개
+SELECT COUNT(*) FROM pg_tables
+WHERE schemaname = 'public' AND rowsecurity = true;
+
+-- 정책 22개
+SELECT COUNT(*) FROM pg_policies WHERE schemaname = 'public';
+
+-- RPC 함수 13개
+SELECT COUNT(*) FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public' AND p.prokind = 'f';
+```
+
+> ⚠️ 카운트가 다르다면 마이그레이션이 중간에 실패한 것입니다. SQL Editor 출력에서 에러 메시지를 확인하여 누락된 단계를 재실행하세요.
+
+---
+
+## 5. Step 3 — 환경 변수 구성
+
+### 5.1 로컬 `.env` (루트)
+
+프로젝트 루트에 `.env` 파일을 생성합니다 (`.gitignore`에 이미 등록됨):
+
+```bash
+# 클라이언트에 노출되는 키 (브라우저 번들에 포함됨)
+NEXT_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...your-anon-key...
+
+# 서버 전용 키 (서버 라우트, Edge Functions에서만 사용)
+SUPABASE_SERVICE_ROLE_KEY=eyJ...your-service-role-key...
+```
+
+> 🚨 **보안**: `SUPABASE_SERVICE_ROLE_KEY`는 절대 GitHub에 commit하면 안 됩니다. `.env` 파일이 `.gitignore`에 포함되어 있는지 반드시 확인:
+> ```bash
+> git check-ignore .env
+> # .env 가 출력되면 정상
+> ```
+
+### 5.2 환경 변수 일관성 규칙 (중요)
+
+본 프로젝트는 **모든 위치에서 동일한 환경 변수 이름**을 사용합니다. 다음 두 규칙을 절대로 깨지 마세요.
+
+1. **클라이언트(브라우저) + 서버 공용**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY` 같은 **prefix 없는 이름은 사용 금지**.
+   - 과거 회귀 사례: 일부 라우트가 `process.env.SUPABASE_URL`을 참조해 production 빌드에서 `undefined`가 되어 로그인 redirect 무한 루프 발생.
+2. **서버 전용 (관리자 권한)**: `SUPABASE_SERVICE_ROLE_KEY`
+   - 클라이언트 코드에 절대로 import 금지.
+
+검증:
+
+```powershell
+# 잘못된 참조가 남아있지 않은지 확인 (0건이어야 함)
+git grep "process.env.SUPABASE_URL" apps/user
+git grep "process.env.SUPABASE_ANON_KEY" apps/user
+```
+
+---
+
+## 6. Step 4 — 로컬 검증
+
+배포 전 반드시 로컬에서 한 번 빌드/실행 확인합니다.
+
+### 6.1 빌드
+
+```bash
+cd apps/user
+npm run build
+```
+
+성공 출력 예:
+```
+✓ Compiled successfully
+✓ Linting and checking validity of types
+✓ Collecting page data
+Route (app)                                Size     First Load JS
+┌ ○ /                                      ...
+```
+
+타입 에러가 나면 진행하지 마세요. 의존성/환경 변수 문제일 가능성이 큽니다.
+
+### 6.2 개발 서버
+
+```bash
+# 루트에서
+pnpm dev:single
+# 또는
+cd apps/user && npm run dev
+```
+
+`http://localhost:3000` 접속 후 다음을 확인:
+
+- [ ] `/` 랜딩 페이지 정상 렌더
+- [ ] `/login` 일반 사용자 로그인 페이지 정상
+- [ ] `/admin/login` 관리자 로그인 페이지 정상
+- [ ] `/partner/login` 에이전트 로그인 페이지 정상
+- [ ] 브라우저 콘솔에 `process.env.NEXT_PUBLIC_SUPABASE_URL is undefined` 같은 에러가 없음
+
+---
+
+## 7. Step 5 — Edge Functions 배포
+
+Edge Functions 8개를 Supabase에 배포합니다.
+
+### 7.1 Supabase 프로젝트 link
+
+```bash
+cd apps/user
+supabase login              # 브라우저 인증
+supabase link --project-ref <your-project-ref>
+```
+
+`<your-project-ref>` 는 Supabase 대시보드 URL의 `https://supabase.com/dashboard/project/<여기>` 부분입니다.
+
+### 7.2 함수 배포
+
+```bash
+# 모든 함수 일괄 배포 (apps/user/supabase/functions/* 에 위치)
+supabase functions deploy --no-verify-jwt
+```
+
+또는 개별 배포:
+
+```bash
+supabase functions deploy register-user
+supabase functions deploy record-user-login
+supabase functions deploy record-backoffice-login
+# ... (총 8개)
+```
+
+### 7.3 함수 secret 설정
+
+서비스 롤 키 등 비밀 값을 Supabase에 등록:
+
+```bash
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
+```
+
+> ⚠️ `SUPABASE_URL`과 `SUPABASE_ANON_KEY`는 Supabase가 자동 주입하므로 별도 설정 불필요.
+
+### 7.4 함수 검증
+
+```bash
+# 함수 목록 확인
+supabase functions list
+
+# 로그 실시간 확인
+supabase functions logs register-user --follow
+```
+
+대시보드 **Edge Functions → Logs** 에서 호출 이력과 에러를 확인합니다.
+
+---
+
+## 8. Step 6 — Vercel 프로젝트 셋업
+
+### 8.1 새 프로젝트 import
+
+1. https://vercel.com/dashboard → **Add New → Project**
+2. GitHub 저장소 선택 → **Import**
+3. **Framework Preset**: `Next.js` 자동 감지
+4. **Root Directory**: `.` (루트 그대로) — `vercel.json`이 `apps/user`로 build 위임함
+5. **Build Settings**:
+   - Install Command: `npm install --legacy-peer-deps && cd apps/user && npm install --legacy-peer-deps` (vercel.json에 명시되어 있어 자동 적용)
+   - Build Command: `cd apps/user && npm run build`
+   - Output Directory: `apps/user/.next`
+
+### 8.2 환경 변수 등록
+
+Vercel **Project → Settings → Environment Variables** 에서 다음 3개를 등록합니다.
+
+| Name | Value | Environment |
+|------|-------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` | Production, Preview, Development |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJ...anon...` | Production, Preview, Development |
+| `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...service_role...` | Production, Preview, Development |
+
+> ⚠️ 모든 환경(Production / Preview / Development)에 동일하게 등록해야 PR 프리뷰 배포에서도 동일 동작.
+
+### 8.3 첫 배포
+
+`master` 브랜치에 push 하거나 Vercel 대시보드 **Deployments → Redeploy** 클릭.
+
+배포 성공 후 다음을 확인:
+
+- [ ] 빌드 로그 마지막에 `✓ Compiled successfully`
+- [ ] Functions 섹션에 API 라우트가 정상 등록
+- [ ] Cron 섹션에 `/api/cron/execute-pending-orders` 매분 스케줄 등록 (Pro 플랜 이상)
+
+### 8.4 Cron 검증
+
+배포 5분 후 Vercel **Cron Jobs** 탭에서 실행 이력을 확인합니다.
+
+```
+Last Run    Status    Duration
+1 min ago   200 OK    120ms
+```
+
+실행이 되지 않으면 vercel.json의 `crons` 섹션을 다시 확인하거나, Hobby 플랜의 경우 Pro로 업그레이드가 필요할 수 있습니다.
+
+---
+
+## 9. Step 7 — 첫 관리자/파트너 계정 생성
+
+새 Supabase에는 사용자가 0명이므로 첫 로그인용 계정을 시드해야 합니다. 방법은 두 가지:
+
+### 9.1 Supabase Auth 대시보드 (권장)
+
+1. Supabase 대시보드 → **Authentication → Users → Add user**
+2. 이메일 + 비밀번호 입력 → 생성
+3. 생성된 user의 UUID 복사
+4. SQL Editor에서 admin 권한 부여:
+   ```sql
+   INSERT INTO public.admins (id, name, role, created_at)
+   VALUES ('<복사한-uuid>', '시스템 관리자', 'super_admin', NOW());
+   ```
+5. 동일하게 파트너 계정 생성 후:
+   ```sql
+   INSERT INTO public.agents (
+     id, name, referral_code, grade, status,
+     loss_commission_rate, rolling_commission_rate, trade_fee_commission_rate,
+     created_at
+   ) VALUES (
+     '<파트너-uuid>', '데모 파트너', 'DEMO01', 'distributor', 'active',
+     0.1, 0.001, 0.05, NOW()
+   );
+   ```
+
+### 9.2 검증
+
+- `/admin/login` → 위에서 만든 admin 계정으로 로그인 → `/admin` 대시보드 진입 확인
+- `/partner/login` → 위에서 만든 agent 계정으로 로그인 → `/partner` 대시보드 진입 확인
+
+> ℹ️ 두 로그인 페이지 모두 `window.location.assign(...)` 으로 full page navigation을 사용해, Supabase 쿠키 정착 race condition을 방지합니다 (회귀 방지).
+
+---
+
+## 10. Step 8 — Production smoke test
+
+배포 직후 반드시 확인해야 할 시나리오입니다.
+
+### 10.1 인증 흐름
+
+- [ ] 신규 사용자 회원가입 → 가입 승인 대기 → 관리자가 승인 → 로그인 가능
+- [ ] 관리자 로그인 1회로 `/admin`에 진입 (새로고침 없이)
+- [ ] 파트너 로그인 1회로 `/partner`에 진입
+- [ ] 로그아웃 후 `/admin/login` 으로 자동 리다이렉트
+
+### 10.2 거래 / 잔고 흐름
+
+- [ ] 일반 사용자 입금 신청 → 관리자 승인 → 잔고 증가
+- [ ] 선물 포지션 진입 → 청산 → 잔고 정산 (PnL · 수수료 정확히 반영)
+- [ ] 강제 청산 (관리자 수동 또는 liquidation-worker) 동작 확인
+
+### 10.3 파트너 커미션 (가장 회귀가 잦은 영역)
+
+- [ ] 회원이 **손실로 포지션 청산** → 파트너 `agent_commissions` 에 **양수** loss commission row 생성
+- [ ] 회원이 **수익으로 포지션 청산** → 파트너에 **음수** loss commission row 생성 (잔액 차감)
+- [ ] 파트너 페이지 커미션 내역에서 음수 금액이 **빨강(text-red-400)** 으로 표시
+- [ ] 파트너 페이지 자동 새로고침(30s 폴링 + Supabase realtime)이 **스피너 없이** 새 행을 추가
+- [ ] 파트너 페이지 시각 표시가 KST (UTC+9)로 일관
+
+### 10.4 Cron 검증
+
+```bash
+# Vercel CLI로 cron 강제 실행
+vercel cron run /api/cron/execute-pending-orders
+```
+
+또는 대시보드 **Cron Jobs → Run**.
+
+---
+
+## 11. 트러블슈팅 (자주 발생하는 함정)
+
+다음은 본 프로젝트에서 **실제로 발생했던 회귀**와 그 해결 방법입니다. 클론 배포 시 동일 증상이 나오면 즉시 해당 섹션을 참조하세요.
+
+### 11.1 로그인 성공 토스트는 뜨는데 페이지 이동이 안 됨 (새로고침 후엔 동작)
+
+**증상**: `/admin/login` 에서 로그인 → "환영합니다" 토스트는 뜨지만 `/admin` 으로 이동 안 됨. 페이지를 새로고침한 뒤 다시 로그인하면 정상 동작.
+
+**원인**: `signInWithPassword` 직후 `router.push("/admin")`이 Next.js soft navigation을 시작하는데, Supabase storage adapter의 cookie write가 NavigatorLock과 경합해 정착되기 전에 RSC fetch가 발사됨. 미들웨어가 쿠키 없는 요청으로 보고 `/admin/login`으로 redirect.
+
+**해결**: full page navigation 사용:
+```ts
+// ❌
+router.push("/admin");
+
+// ✅
+window.location.assign("/admin");
+```
+
+`apps/user/app/admin/login/page.tsx` 와 `apps/user/app/partner/login/page.tsx`가 이미 이 패턴으로 수정되어 있는지 확인.
+
+### 11.2 빌드는 성공하는데 production에서 `supabase URL undefined` 오류
+
+**원인**: 코드 어딘가에서 `process.env.SUPABASE_URL` (NEXT_PUBLIC prefix 없음)을 참조. Vercel은 `NEXT_PUBLIC_*`만 클라이언트 번들에 주입합니다.
+
+**해결**: 다음 grep으로 0건이어야 함:
+```bash
+git grep "process.env.SUPABASE_URL" apps/user
+git grep "process.env.SUPABASE_ANON_KEY" apps/user
+```
+
+발견되면 모두 `process.env.NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`로 통일.
+
+### 11.3 시간 표시가 9시간씩 차이남
+
+**원인**: `Date.prototype.getHours()` 등을 사용해 직접 포맷팅. Vercel Edge Runtime은 UTC를 반환하지만 브라우저는 KST를 반환하여 페이지마다 다른 값.
+
+**해결**: `apps/user/lib/utils/formatDate.ts`가 `Intl.DateTimeFormat`의 `timeZone: "Asia/Seoul"`을 명시적으로 사용하는지 확인. 새로운 시간 표시 코드 작성 시 이 헬퍼를 거치도록 통일.
+
+검증:
+```bash
+git grep "getHours\|getDate\|getMonth" apps/user/lib apps/user/app | grep -v formatDate
+# 0건이어야 함
+```
+
+### 11.4 파트너 페이지 자동 새로고침 때마다 스피너가 돔
+
+**원인**: 30s 폴링 / Supabase realtime callback이 `loadX()` 를 그냥 호출하면 `setXLoading(true)`가 다시 발화되어 테이블 영역이 spinner 로 교체됨.
+
+**해결**: `apps/user/app/partner/components/PartnerClientPage.tsx` 의 `loadMembers / loadCommissions / loadWithdrawals` 가 `{ silent?: boolean }` 옵션을 받고, 폴링/realtime 콜백은 `{ silent: true }`로 호출하는지 확인. silent 모드는 loading state를 변경하지 않아 React가 row diff 만 수행합니다.
+
+### 11.5 죽장(loss) 커미션이 양수만 기록되고 음수(수익 청산)는 0이 됨
+
+**원인**: 과거 코드는 `lossCommissionBase = Math.max(0, -pnl)` 로 손실만 추출.
+
+**해결**: `apps/user/app/api/futures/close/route.ts` 와 `apps/user/app/api/admin/futures/manage/route.ts` 에서 다음과 같이 사용되는지 확인:
+```ts
+const lossCommissionAmount = Number(
+  (-pnl * normalizeCommissionRate(agent.loss_commission_rate, 0)).toFixed(4),
+);
+if (lossCommissionAmount !== 0) { /* insert */ }
+```
+
+> ℹ️ 강제 청산 경로 (`/api/liquidate` 및 `workers/liquidation-worker.ts`)는 PnL이 항상 음수이므로 `Math.max(0, -pnl)` 패턴 유지가 의도된 동작입니다.
+
+### 11.6 RLS 정책 거부로 사용자가 자신의 데이터를 못 읽음
+
+**증상**: 로그인은 되는데 `/admin` 또는 `/partner` 진입 시 빈 데이터, 콘솔에 `42501: new row violates row-level security policy`.
+
+**원인**: `supabase_migration.md` Step 4의 RLS 정책 일부 누락.
+
+**해결**:
+```sql
+-- 활성화된 RLS와 정책 카운트 확인
+SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname='public' ORDER BY tablename;
+SELECT tablename, policyname FROM pg_policies WHERE schemaname='public' ORDER BY tablename;
+```
+
+기대 카운트와 다르면 Step 4를 다시 실행.
+
+### 11.7 Cron이 실행되지 않음
+
+- Vercel 플랜이 Cron을 지원하는지 확인 (Hobby는 제한, Pro 이상 권장)
+- `vercel.json` 의 `crons[].path` 가 실제 라우트 경로와 일치하는지 확인
+- 첫 배포 후 약 5–10분의 propagation delay가 있을 수 있음
+
+### 11.8 Edge Function이 `Function not found (404)` 반환
+
+```bash
+supabase functions list
+# 함수가 목록에 없으면 deploy 실패
+supabase functions deploy <함수명> --debug
+```
+
+`--verify-jwt` 플래그가 함수에 잘못 적용되어 있을 가능성도 점검.
+
+---
+
+## 12. 배포 후 운영 체크
+
+배포 완료 후 다음 항목을 주기적으로 점검하세요.
+
+### 12.1 일일 체크
+
+- [ ] Vercel **Deployments** 화면에 빨강 (Failed) 빌드가 없는지
+- [ ] Supabase **Database → Logs** 에 RLS 거부 폭주가 없는지
+- [ ] Supabase **Edge Functions → Invocations** 에러율이 1% 미만인지
+- [ ] Cron 실행 이력에 연속 실패가 없는지
+
+### 12.2 주간 체크
+
+- [ ] `supabase_migration.md` 에 기록된 RPC 함수 13개가 모두 존재하는지
+- [ ] DB 크기 / 활성 연결 수 모니터링 (Supabase 무료 플랜 한도)
+- [ ] `agent_commissions` 테이블 net 합계가 `agents.available_commission_balance` 와 일치하는지 (커미션 정합성)
+
+```sql
+-- 정합성 검증 쿼리 (모든 파트너에 대해 0이어야 함)
+SELECT
+  a.id,
+  a.name,
+  a.available_commission_balance AS stored_balance,
+  COALESCE(SUM(ac.amount), 0)
+    - COALESCE((SELECT SUM(amount) FROM agent_withdrawals
+                WHERE agent_id = a.id AND status = 'approved'), 0)
+    AS computed_balance,
+  a.available_commission_balance
+    - (COALESCE(SUM(ac.amount), 0)
+       - COALESCE((SELECT SUM(amount) FROM agent_withdrawals
+                   WHERE agent_id = a.id AND status = 'approved'), 0))
+    AS drift
+FROM agents a
+LEFT JOIN agent_commissions ac ON ac.agent_id = a.id
+GROUP BY a.id, a.name, a.available_commission_balance
+HAVING ABS(
+  a.available_commission_balance
+  - (COALESCE(SUM(ac.amount), 0)
+     - COALESCE((SELECT SUM(amount) FROM agent_withdrawals
+                 WHERE agent_id = a.id AND status = 'approved'), 0))
+) > 0.01;
+```
+
+### 12.3 비밀 키 로테이션 (분기 1회 권장)
+
+1. Supabase 대시보드 → **Settings → API → Roll** (anon / service_role)
+2. Vercel 환경 변수 업데이트
+3. 로컬 `.env` 도 업데이트
+4. **반드시 모든 Edge Functions secrets 도 재배포**:
+   ```bash
+   supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<new>
+   ```
+
+---
+
+## 13. 부록 — 10분 Quick Deploy 체크리스트
+
+이미 한 번 배포해본 경험자가 다른 환경에 빠르게 클론 배포할 때 사용하는 압축 체크리스트입니다.
+
+```
+[ 사전 ]
+□ Node 20+, pnpm 9+, supabase CLI, vercel CLI, git 설치
+□ Supabase 계정, Vercel 계정, GitHub 계정 로그인
+
+[ Supabase ]
+□ 새 프로젝트 생성 → URL / anon / service_role 키 복사
+□ supabase_migration.md Step 1~9 SQL Editor 실행
+□ 검증 쿼리: 테이블 17, 정책 22, RPC 13 일치 확인
+
+[ 로컬 ]
+□ git clone <repo>
+□ .env 작성 (NEXT_PUBLIC_SUPABASE_URL/ANON_KEY + SERVICE_ROLE_KEY)
+□ npm install --legacy-peer-deps (루트, apps/user 둘 다)
+□ apps/user에서 npm run build 성공 확인
+
+[ Edge Functions ]
+□ supabase link --project-ref <ref>
+□ supabase functions deploy
+□ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...
+
+[ Vercel ]
+□ GitHub 저장소 import (Framework: Next.js)
+□ 환경 변수 3개 등록 (Production/Preview/Development 모두)
+□ 배포 → 빌드 성공 확인
+□ Cron 등록 확인 (Pro 플랜)
+
+[ Seed ]
+□ Supabase Auth에서 첫 admin / agent 사용자 생성
+□ SQL로 admins / agents 테이블에 권한 row 추가
+□ /admin/login, /partner/login 진입 검증
+
+[ Smoke test ]
+□ 회원가입 → 승인 → 로그인 흐름
+□ 입금 신청 → 승인 → 잔고 반영
+□ 선물 포지션 진입/청산 → 커미션 row 생성
+□ 음수 커미션 빨강 표시 / 자동 새로고침 silent 동작
+□ KST 시간 표시 일관성
+□ Cron 5분 후 실행 이력 확인
+
+[ 마무리 ]
+□ git tag v1.0.0-clone && git push --tags
+□ Supabase / Vercel / GitHub URL 을 README 또는 운영 노트에 기록
+```
+
+---
+
+## 부가 — 알려진 주의사항
+
+1. **`.env` 절대 commit 금지** — `.gitignore`에 등록되어 있지만, 신규 환경에서는 반드시 `git check-ignore .env` 로 확인.
+2. **`SUPABASE_SERVICE_ROLE_KEY`는 서버에서만** — 클라이언트 코드에서 `process.env.SUPABASE_SERVICE_ROLE_KEY` 참조 시 빌드는 통과하지만 production 번들에 `undefined`로 들어가 보안/동작 모두 문제.
+3. **Next.js 16 + React 19 alpha** — peer-dep 경고가 다수 발생. `--legacy-peer-deps` 사용.
+4. **Supabase realtime** — 파트너 페이지가 `agent_commissions`, `withdrawals` 채널을 구독합니다. Supabase 대시보드 **Database → Replication → realtime** 에서 두 테이블의 replication이 활성화되어 있어야 합니다.
+5. **타임존** — DB 자체는 UTC 저장. 표시는 항상 `formatDate.ts` 의 KST 헬퍼를 거치도록 통일.
+
+---
+
+문서 최종 업데이트: 2026-05-14
+관련 문서: `supabase_migration.md`, `partner_migration.md`
