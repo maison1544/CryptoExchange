@@ -112,10 +112,16 @@ export default function TradePage() {
   return (
     <AppLayout>
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#0b0e11] relative">
-        {/* Top Section */}
-        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        {/* Top Section
+            Mobile: vertical column with explicit chart height so the chart is
+            always visible on first paint. Without an explicit height the
+            sibling OrderBook column (shrink-0 + h-full) collapses the chart's
+            flex-1 box to 0, and the chart only became visible when the
+            OrderBook tab change triggered a layout reflow.
+            Desktop: original row layout, chart flex-1 fills remaining space. */}
+        <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
           {/* Middle: Chart */}
-          <div className="flex-1 min-w-[400px] border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col relative">
+          <div className="h-[55vh] min-h-[320px] shrink-0 lg:h-auto lg:min-h-0 lg:flex-1 lg:shrink lg:min-w-[400px] border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col relative">
             <BinanceKlineChart
               ticker={ticker}
               markPrice={markPrice}
@@ -126,8 +132,8 @@ export default function TradePage() {
           </div>
 
           {/* Right: Order Book & Order Panel */}
-          <div className="w-full lg:w-[600px] shrink-0 flex flex-col lg:flex-row h-full overflow-hidden">
-            <div className="w-full lg:w-[300px] border-b lg:border-b-0 lg:border-r border-gray-800 h-full overflow-hidden">
+          <div className="w-full lg:w-[600px] lg:shrink-0 flex flex-col lg:flex-row lg:h-full lg:overflow-hidden">
+            <div className="w-full lg:w-[300px] h-[420px] lg:h-full shrink-0 border-b lg:border-b-0 lg:border-r border-gray-800 overflow-hidden">
               <OrderBook
                 orderBook={orderBook}
                 recentTrades={recentTrades}
@@ -137,7 +143,7 @@ export default function TradePage() {
                 onSelectPrice={handleSelectOrderPrice}
               />
             </div>
-            <div className="w-full lg:w-[300px] h-full overflow-hidden">
+            <div className="w-full lg:w-[300px] lg:h-full shrink-0 lg:overflow-hidden">
               {user ? (
                 <OrderPanel
                   currentPrice={currentPrice}
