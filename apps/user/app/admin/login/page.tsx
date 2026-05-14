@@ -36,7 +36,12 @@ export default function AdminLoginPage() {
       message: "환영합니다.",
       type: "success",
     });
-    router.push("/admin");
+    // Full page navigation: middleware가 새 HTTP 요청에서 freshly-written
+    // auth cookie를 보장 받도록 함. `router.push`는 Supabase storage adapter의
+    // cookie write가 정착되기 전에 RSC fetch를 보낼 수 있어, 첫 로그인 시
+    // middleware가 인증되지 않은 요청으로 보고 `/admin/login`으로 되돌리는
+    // 회귀가 있었음 (새로고침 후 두 번째 로그인은 lock이 풀려 정상 동작).
+    window.location.assign("/admin");
   };
 
   return (

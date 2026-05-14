@@ -33,7 +33,11 @@ export default function PartnerLoginPage() {
       message: "환영합니다.",
       type: "success",
     });
-    router.push("/partner");
+    // `/admin/login`과 같은 이유로 full page navigation을 사용합니다.
+    // (Supabase storage adapter cookie write가 정착되기 전에 RSC fetch가
+    // 발사되면 middleware가 인증 실패로 본 후 `/partner/login`으로 되돌리는
+    // race condition을 방지)
+    window.location.assign("/partner");
   };
 
   const { run: handleSubmit, isPending: loading } = useAsyncAction(submitLogin);
