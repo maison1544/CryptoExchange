@@ -211,6 +211,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...your-anon-key...
 
 # 서버 전용 키 (서버 라우트, Edge Functions에서만 사용)
 SUPABASE_SERVICE_ROLE_KEY=eyJ...your-service-role-key...
+
+# Vercel Cron 호출 인증용 비밀 토큰 (임의의 강한 문자열 권장: openssl rand -hex 32)
+# 이 값이 비어있으면 /api/cron/execute-pending-orders 가 fail-closed 로 401 반환합니다.
+CRON_SECRET=<openssl rand -hex 32 또는 임의의 64자 문자열>
 ```
 
 > 🚨 **보안**: `SUPABASE_SERVICE_ROLE_KEY`는 절대 GitHub에 commit하면 안 됩니다. `.env` 파일이 `.gitignore`에 포함되어 있는지 반드시 확인:
@@ -349,15 +353,17 @@ supabase functions logs register-user --follow
 
 ### 8.2 환경 변수 등록
 
-Vercel **Project → Settings → Environment Variables** 에서 다음 3개를 등록합니다.
+Vercel **Project → Settings → Environment Variables** 에서 다음 4개를 등록합니다.
 
 | Name | Value | Environment |
 |------|-------|-------------|
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` | Production, Preview, Development |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJ...anon...` | Production, Preview, Development |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...service_role...` | Production, Preview, Development |
+| `CRON_SECRET` | `openssl rand -hex 32` 출력 등 임의 강한 비밀 | Production (최소) |
 
 > ⚠️ 모든 환경(Production / Preview / Development)에 동일하게 등록해야 PR 프리뷰 배포에서도 동일 동작.
+> ⚠️ **`CRON_SECRET` 누락 시 cron 라우트가 401로 fail-closed** 되어 미체결 지정가 주문이 영원히 체결되지 않습니다. Vercel 대시보드 → Settings → Cron Jobs 가 자동으로 같은 시크릿을 `Authorization: Bearer ...` 헤더로 주입하므로 별도 코드 변경 없이 동작합니다.
 
 ### 8.3 첫 배포
 
@@ -538,6 +544,7 @@ SELECT tablename, policyname FROM pg_policies WHERE schemaname='public' ORDER BY
 - Vercel 플랜이 Cron을 지원하는지 확인 (Hobby는 제한, Pro 이상 권장)
 - `vercel.json` 의 `crons[].path` 가 실제 라우트 경로와 일치하는지 확인
 - 첫 배포 후 약 5–10분의 propagation delay가 있을 수 있음
+- `CRON_SECRET` 이 Vercel 환경 변수에 등록되어 있는지 확인 (없으면 401 fail-closed)
 
 ### 11.8 Edge Function이 `Function not found (404)` 반환
 
@@ -603,6 +610,7 @@ HAVING ABS(
    ```bash
    supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<new>
    ```
+5. 필요 시 `CRON_SECRET` 도 함께 로테이션 (Vercel 환경 변수만 수정하면 됨)
 
 ---
 
@@ -622,7 +630,7 @@ HAVING ABS(
 
 [ 로컬 ]
 □ git clone <repo>
-□ .env 작성 (NEXT_PUBLIC_SUPABASE_URL/ANON_KEY + SERVICE_ROLE_KEY)
+□ .env 작성 (NEXT_PUBLIC_SUPABASE_URL/ANON_KEY + SERVICE_ROLE_KEY + CRON_SECRET)
 □ npm install --legacy-peer-deps (루트, apps/user 둘 다)
 □ apps/user에서 npm run build 성공 확인
 
@@ -633,9 +641,9 @@ HAVING ABS(
 
 [ Vercel ]
 □ GitHub 저장소 import (Framework: Next.js)
-□ 환경 변수 3개 등록 (Production/Preview/Development 모두)
+□ 환경 변수 4개 등록 (NEXT_PUBLIC_SUPABASE_URL/ANON_KEY + SUPABASE_SERVICE_ROLE_KEY + CRON_SECRET)
 □ 배포 → 빌드 성공 확인
-□ Cron 등록 확인 (Pro 플랜)
+□ Cron 등록 확인 (1분 주기는 Pro 플랜 이상 필요)
 
 [ Seed ]
 □ Supabase Auth에서 첫 admin / agent 사용자 생성
@@ -649,6 +657,8 @@ HAVING ABS(
 □ 음수 커미션 빨강 표시 / 자동 새로고침 silent 동작
 □ KST 시간 표시 일관성
 □ Cron 5분 후 실행 이력 확인
+□ 관리자 로그아웃 → /admin/login 으로 이동
+□ 모바일 거래 페이지 진입 즉시 차트 표시 (탭 클릭 불필요)
 
 [ 마무리 ]
 □ git tag v1.0.0-clone && git push --tags
@@ -664,6 +674,7 @@ HAVING ABS(
 3. **Next.js 16 + React 19 alpha** — peer-dep 경고가 다수 발생. `--legacy-peer-deps` 사용.
 4. **Supabase realtime** — 파트너 페이지가 `agent_commissions`, `withdrawals` 채널을 구독합니다. Supabase 대시보드 **Database → Replication → realtime** 에서 두 테이블의 replication이 활성화되어 있어야 합니다.
 5. **타임존** — DB 자체는 UTC 저장. 표시는 항상 `formatDate.ts` 의 KST 헬퍼를 거치도록 통일.
+6. **`CRON_SECRET`** — Vercel Cron 호출 인증용. 누락 시 cron이 fail-closed로 401 반환하여 미체결 지정가 주문이 영원히 체결되지 않습니다.
 
 ---
 
