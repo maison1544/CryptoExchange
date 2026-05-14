@@ -327,11 +327,12 @@ export async function POST(req: NextRequest) {
                 closeFee * normalizeCommissionRate(agent.fee_commission_rate, 0)
               ).toFixed(4),
             );
-            const lossCommissionBase = Math.max(0, -pnl);
+            // 죽장 커미션은 회원 손익 부호를 그대로 반영합니다.
+            //   - 손실 청산 → 파트너에게 +커미션, 수익 청산 → -커미션
+            // futures/close 경로와 동일 정책.
             const lossCommissionAmount = Number(
               (
-                lossCommissionBase *
-                normalizeCommissionRate(agent.loss_commission_rate, 0)
+                -pnl * normalizeCommissionRate(agent.loss_commission_rate, 0)
               ).toFixed(4),
             );
 
@@ -344,7 +345,7 @@ export async function POST(req: NextRequest) {
                 amount: feeCommissionAmount,
               });
             }
-            if (lossCommissionAmount > 0) {
+            if (lossCommissionAmount !== 0) {
               commissionRows.push({
                 agent_id: agent.id,
                 user_id: position.user_id,
