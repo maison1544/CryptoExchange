@@ -221,11 +221,14 @@ export async function POST(req: NextRequest) {
               closeFee * normalizeCommissionRate(agent.fee_commission_rate, 0)
             ).toFixed(4),
           );
-          const lossCommissionBase = Math.max(0, -pnl);
+          // 죽장 커미션은 회원 손익 부호를 그대로 반영합니다.
+          //   - 회원이 손실 청산 → -pnl > 0 → 파트너에게 +커미션 (수익 분배)
+          //   - 회원이 수익 청산 → -pnl < 0 → 파트너에게 -커미션 (요율만큼 차감)
+          // 두 경우 모두 동일 source_type="loss"로 누적되며,
+          // 합산 시 자연스럽게 순손익(net) 기준으로 정산됩니다.
           const lossCommissionAmount = Number(
             (
-              lossCommissionBase *
-              normalizeCommissionRate(agent.loss_commission_rate, 0)
+              -pnl * normalizeCommissionRate(agent.loss_commission_rate, 0)
             ).toFixed(4),
           );
 
@@ -239,7 +242,7 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          if (lossCommissionAmount > 0) {
+          if (lossCommissionAmount !== 0) {
             commissionRows.push({
               agent_id: agent.id,
               user_id: user.id,
