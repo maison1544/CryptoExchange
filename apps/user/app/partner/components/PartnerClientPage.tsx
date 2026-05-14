@@ -1009,7 +1009,11 @@ export function PartnerClientPage() {
                       <AdminTableCell className="px-3 py-3 align-middle whitespace-normal text-center text-gray-300">
                         {row.description}
                       </AdminTableCell>
-                      <AdminTableCell className="px-3 py-3 align-middle whitespace-nowrap text-center text-green-400 font-medium tabular-nums">
+                      <AdminTableCell
+                        className={`px-3 py-3 align-middle whitespace-nowrap text-center font-medium tabular-nums ${
+                          row.amount < 0 ? "text-red-400" : "text-green-400"
+                        }`}
+                      >
                         {formatUsdt(row.amount, { signed: true })}
                       </AdminTableCell>
                       <AdminTableCell className="px-3 py-3 align-middle whitespace-nowrap text-center">
