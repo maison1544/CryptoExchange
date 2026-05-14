@@ -70,7 +70,7 @@ export function AdminHeader() {
                 </div>
               </div>
 
-              <LogoutButton />
+              <LogoutButton redirectTo="/admin/login" />
             </div>
           </div>
         </div>
