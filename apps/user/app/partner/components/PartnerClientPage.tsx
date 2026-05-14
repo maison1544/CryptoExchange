@@ -253,97 +253,135 @@ export function PartnerClientPage() {
     }
   }, [handleAccessFailure, syncSummary]);
 
-  const loadMembers = useCallback(async () => {
-    setMemberLoading(true);
-    setMemberError(null);
+  const loadMembers = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) {
+        setMemberLoading(true);
+        setMemberError(null);
+      }
 
-    try {
-      const response = await fetchPartnerMembers({
-        page: memberPage,
-        pageSize: PAGE_SIZE,
-        search: debouncedMemberSearch.trim(),
-      });
-      syncSummary(response.summary);
-      setMemberRows(response.members.rows);
-      setMemberTotalCount(response.members.totalCount);
-    } catch (error) {
-      setMemberError(
-        getErrorMessage(error, "귀속 회원 목록을 불러오지 못했습니다."),
-      );
-      setMemberRows([]);
-      setMemberTotalCount(0);
-    } finally {
-      setMemberLoading(false);
-    }
-  }, [debouncedMemberSearch, memberPage, syncSummary]);
+      try {
+        const response = await fetchPartnerMembers({
+          page: memberPage,
+          pageSize: PAGE_SIZE,
+          search: debouncedMemberSearch.trim(),
+        });
+        syncSummary(response.summary);
+        setMemberRows(response.members.rows);
+        setMemberTotalCount(response.members.totalCount);
+        if (silent) {
+          setMemberError(null);
+        }
+      } catch (error) {
+        if (!silent) {
+          setMemberError(
+            getErrorMessage(error, "귀속 회원 목록을 불러오지 못했습니다."),
+          );
+          setMemberRows([]);
+          setMemberTotalCount(0);
+        }
+      } finally {
+        if (!silent) {
+          setMemberLoading(false);
+        }
+      }
+    },
+    [debouncedMemberSearch, memberPage, syncSummary],
+  );
 
-  const loadCommissions = useCallback(async () => {
-    setCommissionLoading(true);
-    setCommissionError(null);
+  const loadCommissions = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) {
+        setCommissionLoading(true);
+        setCommissionError(null);
+      }
 
-    try {
-      const response = await fetchPartnerCommissions({
-        page: commissionPage,
-        pageSize: PAGE_SIZE,
-        sourceType: commissionType,
-        startDate: commissionStartDate,
-        endDate: commissionEndDate,
-        search: debouncedCommissionSearch.trim(),
-      });
-      syncSummary(response.summary);
-      setCommissionRows(response.commissions.rows);
-      setCommissionTotalCount(response.commissions.totalCount);
-    } catch (error) {
-      setCommissionError(
-        getErrorMessage(error, "커미션 내역을 불러오지 못했습니다."),
-      );
-      setCommissionRows([]);
-      setCommissionTotalCount(0);
-    } finally {
-      setCommissionLoading(false);
-    }
-  }, [
-    commissionEndDate,
-    commissionPage,
-    commissionStartDate,
-    commissionType,
-    debouncedCommissionSearch,
-    syncSummary,
-  ]);
+      try {
+        const response = await fetchPartnerCommissions({
+          page: commissionPage,
+          pageSize: PAGE_SIZE,
+          sourceType: commissionType,
+          startDate: commissionStartDate,
+          endDate: commissionEndDate,
+          search: debouncedCommissionSearch.trim(),
+        });
+        syncSummary(response.summary);
+        // 조용한 교체: 기존 행을 유지한 채로 새 배열로 setState. React가
+        // diff하여 실제로 값이 변경된 행만 재렌더링하므로 깜빡임이 없습니다.
+        setCommissionRows(response.commissions.rows);
+        setCommissionTotalCount(response.commissions.totalCount);
+        if (silent) {
+          setCommissionError(null);
+        }
+      } catch (error) {
+        if (!silent) {
+          setCommissionError(
+            getErrorMessage(error, "커미션 내역을 불러오지 못했습니다."),
+          );
+          setCommissionRows([]);
+          setCommissionTotalCount(0);
+        }
+      } finally {
+        if (!silent) {
+          setCommissionLoading(false);
+        }
+      }
+    },
+    [
+      commissionEndDate,
+      commissionPage,
+      commissionStartDate,
+      commissionType,
+      debouncedCommissionSearch,
+      syncSummary,
+    ],
+  );
 
-  const loadWithdrawals = useCallback(async () => {
-    setWithdrawLoading(true);
-    setWithdrawError(null);
+  const loadWithdrawals = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) {
+        setWithdrawLoading(true);
+        setWithdrawError(null);
+      }
 
-    try {
-      const response = await fetchPartnerWithdrawals({
-        page: withdrawPage,
-        pageSize: PAGE_SIZE,
-        status: withdrawStatus,
-        startDate: withdrawStartDate,
-        endDate: withdrawEndDate,
-        search: debouncedWithdrawSearch.trim(),
-      });
-      syncSummary(response.summary);
-      setWithdrawRows(response.withdrawals.rows);
-      setWithdrawTotalCount(response.withdrawals.totalCount);
-    } catch (error) {
-      setWithdrawError(
-        getErrorMessage(error, "출금 내역을 불러오지 못했습니다."),
-      );
-      setWithdrawRows([]);
-      setWithdrawTotalCount(0);
-    } finally {
-      setWithdrawLoading(false);
-    }
-  }, [
-    debouncedWithdrawSearch,
-    syncSummary,
-    withdrawEndDate,
-    withdrawPage,
-    withdrawStartDate,
-    withdrawStatus,
-  ]);
+      try {
+        const response = await fetchPartnerWithdrawals({
+          page: withdrawPage,
+          pageSize: PAGE_SIZE,
+          status: withdrawStatus,
+          startDate: withdrawStartDate,
+          endDate: withdrawEndDate,
+          search: debouncedWithdrawSearch.trim(),
+        });
+        syncSummary(response.summary);
+        setWithdrawRows(response.withdrawals.rows);
+        setWithdrawTotalCount(response.withdrawals.totalCount);
+        if (silent) {
+          setWithdrawError(null);
+        }
+      } catch (error) {
+        if (!silent) {
+          setWithdrawError(
+            getErrorMessage(error, "출금 내역을 불러오지 못했습니다."),
+          );
+          setWithdrawRows([]);
+          setWithdrawTotalCount(0);
+        }
+      } finally {
+        if (!silent) {
+          setWithdrawLoading(false);
+        }
+      }
+    },
+    [
+      debouncedWithdrawSearch,
+      syncSummary,
+      withdrawEndDate,
+      withdrawPage,
+      withdrawStartDate,
+      withdrawStatus,
+    ],
+  );
 
   useEffect(() => {
     if (!isInitialized) {
@@ -421,13 +459,15 @@ export function PartnerClientPage() {
     memberRows.slice(0, 6).forEach((member) => prefetchMemberDetail(member.id));
   }, [activeTab, memberRows]);
 
-  // Periodic polling: refresh active tab data every 30s
+  // Periodic polling: refresh active tab data every 30s in silent mode so the
+  // visible rows are replaced in place instead of being swapped for a spinner.
   const pollActiveTab = useCallback(() => {
     if (role !== "agent") return;
     void loadSummary();
-    if (activeTab === "members") void loadMembers();
-    else if (activeTab === "commissions") void loadCommissions();
-    else if (activeTab === "withdraw") void loadWithdrawals();
+    if (activeTab === "members") void loadMembers({ silent: true });
+    else if (activeTab === "commissions")
+      void loadCommissions({ silent: true });
+    else if (activeTab === "withdraw") void loadWithdrawals({ silent: true });
   }, [
     activeTab,
     loadCommissions,
@@ -439,7 +479,9 @@ export function PartnerClientPage() {
 
   useInterval(pollActiveTab, role === "agent" ? POLLING_INTERVAL : null);
 
-  // Supabase realtime: listen for withdrawal status changes and new commissions
+  // Supabase realtime: listen for withdrawal status changes and new commissions.
+  // Background updates run silently so newly inserted rows appear in place
+  // without flipping the table back to a loading spinner.
   useEffect(() => {
     if (role !== "agent" || !user) return;
 
@@ -455,7 +497,7 @@ export function PartnerClientPage() {
         },
         () => {
           void loadSummary();
-          if (activeTab === "withdraw") void loadWithdrawals();
+          if (activeTab === "withdraw") void loadWithdrawals({ silent: true });
         },
       )
       .on(
@@ -468,7 +510,8 @@ export function PartnerClientPage() {
         },
         () => {
           void loadSummary();
-          if (activeTab === "commissions") void loadCommissions();
+          if (activeTab === "commissions")
+            void loadCommissions({ silent: true });
         },
       )
       .subscribe();
@@ -728,7 +771,7 @@ export function PartnerClientPage() {
                     <AdminTableCell colSpan={9}>
                       <AdminErrorState
                         message={memberError}
-                        onRetry={loadMembers}
+                        onRetry={() => loadMembers()}
                       />
                     </AdminTableCell>
                   </AdminTableRow>
@@ -932,7 +975,7 @@ export function PartnerClientPage() {
                     <AdminTableCell colSpan={7}>
                       <AdminErrorState
                         message={commissionError}
-                        onRetry={loadCommissions}
+                        onRetry={() => loadCommissions()}
                       />
                     </AdminTableCell>
                   </AdminTableRow>
@@ -1177,7 +1220,7 @@ export function PartnerClientPage() {
                 ) : withdrawError ? (
                   <AdminErrorState
                     message={withdrawError}
-                    onRetry={loadWithdrawals}
+                    onRetry={() => loadWithdrawals()}
                   />
                 ) : withdrawRows.length === 0 ? (
                   <AdminEmptyState message="조건에 맞는 출금 내역이 없습니다." />
@@ -1229,7 +1272,7 @@ export function PartnerClientPage() {
 
                     <AdminPagination
                       currentPage={withdrawPage}
-                      totalPages={withdrawTotalCount > 0 ? withdrawTotalPages : 1}
+                      totalPages={withdrawTotalPages}
                       totalCount={withdrawTotalCount}
                       pageSize={PAGE_SIZE}
                       onPageChange={setWithdrawPage}
