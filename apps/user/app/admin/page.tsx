@@ -9,11 +9,9 @@ import {
   Activity,
 } from "lucide-react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { fetchAdminDashboardStats } from "@/lib/api/adminDashboard";
 import type { DashboardStats } from "@/lib/types/database";
 import { AdminCard } from "@/components/admin/ui/AdminCard";
-
-const supabase = createClient();
 
 const formatNumber = (value: number) =>
   new Intl.NumberFormat("ko-KR").format(value);
@@ -36,9 +34,17 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats>(defaultStats);
 
   useEffect(() => {
-    supabase.rpc("get_admin_dashboard_stats").then(({ data }) => {
-      if (data) setStats(data as DashboardStats);
-    });
+    let cancelled = false;
+    fetchAdminDashboardStats()
+      .then((data) => {
+        if (!cancelled && data) setStats(data);
+      })
+      .catch(() => {
+        // Ignore — non-admins or transient errors leave defaults in place.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const adminMockSummary = {

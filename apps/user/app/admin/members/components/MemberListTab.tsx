@@ -2287,15 +2287,24 @@ export function MemberListTab() {
                   )
                     return;
                   const finalAmt = balanceAdjust.type === "add" ? amt : -amt;
-                  const adminEmail = user?.email ?? "unknown";
-                  const reason = `[${adminEmail}] ${adjustMemo || "admin_adjustment"}`;
-                  await supabase.rpc("adjust_user_balance", {
-                    p_user_id: selectedMember.visibleId,
-                    p_amount: finalAmt,
-                    p_reason: reason,
-                  });
-                  setBalanceAdjust(null);
-                  await refreshMembers();
+                  try {
+                    await adjustAdminMemberBalance(
+                      selectedMember.visibleId,
+                      finalAmt,
+                      adjustMemo || "admin_adjustment",
+                    );
+                    setBalanceAdjust(null);
+                    await refreshMembers();
+                  } catch (err) {
+                    addToast({
+                      title: "잔액 조정 실패",
+                      message:
+                        err instanceof Error
+                          ? err.message
+                          : "잔액 조정에 실패했습니다.",
+                      type: "error",
+                    });
+                  }
                 }}
                 className={`px-6 py-2 ${balanceAdjust.type === "add" ? "bg-emerald-500 hover:bg-emerald-600" : "bg-red-500 hover:bg-red-600"} text-white font-bold rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed`}
               >

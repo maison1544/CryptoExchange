@@ -22,6 +22,7 @@ import {
 } from "@/components/admin/ui/AdminLoadingSpinner";
 import { Search } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { processAdminWalletRequest } from "@/lib/api/adminDashboard";
 import {
   createUserDisplayMaps,
   type UserDisplayProfile,
@@ -469,30 +470,25 @@ export function MemberBalanceTab() {
     action: "approve" | "reject",
     log: BalanceLog,
   ) => {
-    const rpcName =
-      log._table === "deposits" ? "process_deposit" : "process_withdrawal";
-    const paramId =
-      log._table === "deposits"
-        ? { p_deposit_id: log.id }
-        : { p_withdrawal_id: log.id };
-    const { error } = await supabase.rpc(rpcName, {
-      ...paramId,
-      p_action: action === "approve" ? "approve" : "reject",
-      ...(action === "reject" ? { p_reason: "관리자 거절" } : {}),
-    });
-    if (error) {
-      addToast({
-        title: "처리 실패",
-        message: error.message,
-        type: "error",
+    try {
+      await processAdminWalletRequest({
+        kind: log._table === "deposits" ? "deposit" : "withdrawal",
+        requestId: log.id,
+        action,
+        reason: action === "reject" ? "관리자 거절" : null,
       });
-    } else {
       addToast({
         title: `요청 ${action === "approve" ? "승인" : "거절"} 완료`,
         message: `${log.name}님의 ${log.type} 요청이 ${action === "approve" ? "승인" : "거절"}되었습니다.`,
         type: "success",
       });
       await reloadBalanceLogs();
+    } catch (error) {
+      addToast({
+        title: "처리 실패",
+        message: error instanceof Error ? error.message : "처리에 실패했습니다.",
+        type: "error",
+      });
     }
     setConfirmAction(null);
   };

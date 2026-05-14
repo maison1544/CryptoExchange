@@ -252,7 +252,12 @@ export default function SignupPage() {
             계정을 생성하고 거래를 시작하세요
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form
+            onSubmit={handleSubmit}
+            method="post"
+            action="/signup"
+            className="space-y-3"
+          >
             {/* ── 기본 정보 ── */}
             <p className="text-xs text-gray-500 font-medium tracking-wide uppercase">
               기본 정보
@@ -429,6 +434,7 @@ export default function SignupPage() {
                     name="passwordConfirm"
                     type={showPasswordConfirm ? "text" : "password"}
                     required
+                    autoComplete="new-password"
                     value={form.passwordConfirm}
                     onChange={handleChange}
                     placeholder="비밀번호 재입력"

@@ -54,7 +54,12 @@ export default function PartnerLoginPage() {
         </div>
 
         <div className="bg-[#1a1d26] border border-gray-800 rounded-2xl p-8">
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form
+            onSubmit={handleSubmit}
+            method="post"
+            action="/partner/login"
+            className="space-y-5"
+          >
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 이메일
@@ -63,6 +68,7 @@ export default function PartnerLoginPage() {
                 name="email"
                 type="email"
                 required
+                autoComplete="username"
                 value={form.email}
                 onChange={handleChange}
                 placeholder="에이전트 이메일"
@@ -79,6 +85,7 @@ export default function PartnerLoginPage() {
                   name="password"
                   type={showPassword ? "text" : "password"}
                   required
+                  autoComplete="current-password"
                   value={form.password}
                   onChange={handleChange}
                   placeholder="비밀번호 입력"

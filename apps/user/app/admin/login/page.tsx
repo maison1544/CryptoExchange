@@ -81,6 +81,7 @@ export default function AdminLoginPage() {
                   name="password"
                   type={showPassword ? "text" : "password"}
                   required
+                  autoComplete="current-password"
                   value={form.password}
                   onChange={handleChange}
                   placeholder="비밀번호 입력"

@@ -56,7 +56,12 @@ export default function LoginPage() {
             계정에 로그인하여 거래를 시작하세요
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form
+            onSubmit={handleSubmit}
+            method="post"
+            action="/login"
+            className="space-y-5"
+          >
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 이메일 (아이디)
@@ -65,6 +70,7 @@ export default function LoginPage() {
                 name="email"
                 type="email"
                 required
+                autoComplete="username"
                 value={form.email}
                 onChange={handleChange}
                 placeholder="example@email.com"
@@ -81,6 +87,7 @@ export default function LoginPage() {
                   name="password"
                   type={showPassword ? "text" : "password"}
                   required
+                  autoComplete="current-password"
                   value={form.password}
                   onChange={handleChange}
                   placeholder="비밀번호 입력"
