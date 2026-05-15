@@ -71,6 +71,8 @@ type StakingProductDbRow = {
   duration_days: number;
   annual_rate: number | string | null;
   default_settlement_rate: number | string | null;
+  settlement_rate_min: number | string | null;
+  settlement_rate_max: number | string | null;
   min_amount: number | string | null;
   max_amount: number | string | null;
   is_active: boolean;
@@ -140,8 +142,16 @@ function StakingProductsTab() {
             ? ("변동형" as const)
             : ("안정형" as const),
           period: product.duration_days,
-          rateMin: Number(product.annual_rate) * 100,
-          rateMax: Number(product.annual_rate) * 100 * 2,
+          rateMin:
+            product.settlement_rate_min === null ||
+            product.settlement_rate_min === undefined
+              ? Number(product.annual_rate) * 100
+              : Number(product.settlement_rate_min),
+          rateMax:
+            product.settlement_rate_max === null ||
+            product.settlement_rate_max === undefined
+              ? Number(product.annual_rate) * 100
+              : Number(product.settlement_rate_max),
           minAmount: Number(product.min_amount),
           maxAmount: Number(product.max_amount),
           status: product.is_active ? "판매중" : "판매중단",
@@ -637,6 +647,8 @@ function StakingProductsTab() {
                     min_amount: Number(form.minAmount) || 100,
                     max_amount: Number(form.maxAmount) || 100000,
                     annual_rate: (Number(form.rateMin) || 0) / 100,
+                    settlement_rate_min: Number(form.rateMin) || 0,
+                    settlement_rate_max: Number(form.rateMax) || 0,
                     duration_days: Number(form.period) || 30,
                     is_active: true,
                   };

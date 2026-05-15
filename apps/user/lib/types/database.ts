@@ -137,6 +137,8 @@ export interface DbStakingProduct {
   max_amount: number | null;
   annual_rate: number;
   default_settlement_rate: number | null;
+  settlement_rate_min: number | null;
+  settlement_rate_max: number | null;
   duration_days: number;
   is_active: boolean;
   created_at: string;
@@ -150,6 +152,7 @@ export interface DbStakingPosition {
   daily_reward: number;
   total_earned: number;
   settlement_rate_override: number | null;
+  applied_settlement_rate: number | null;
   status: "active" | "completed" | "cancelled";
   cancel_reason: string | null;
   started_at: string;

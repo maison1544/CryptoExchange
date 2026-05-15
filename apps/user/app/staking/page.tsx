@@ -37,6 +37,30 @@ function formatRatePercent(value: number) {
   })}%`;
 }
 
+function formatProductRate(
+  product: Pick<
+    DbStakingProduct,
+    "annual_rate" | "settlement_rate_min" | "settlement_rate_max"
+  >,
+) {
+  const minRate =
+    product.settlement_rate_min === null ||
+    product.settlement_rate_min === undefined
+      ? Number(product.annual_rate) * 100
+      : Number(product.settlement_rate_min);
+  const maxRate =
+    product.settlement_rate_max === null ||
+    product.settlement_rate_max === undefined
+      ? minRate
+      : Number(product.settlement_rate_max);
+
+  if (minRate === maxRate) {
+    return formatRatePercent(minRate);
+  }
+
+  return `${formatRatePercent(minRate)} ~ ${formatRatePercent(maxRate)}`;
+}
+
 type StakingHistoryRecord = {
   id: number;
   date: string;
@@ -52,7 +76,12 @@ type StakingHistoryRecord = {
 type StakingPositionRecord = DbStakingPosition & {
   staking_products: Pick<
     DbStakingProduct,
-    "name" | "product_type" | "duration_days" | "annual_rate"
+    | "name"
+    | "product_type"
+    | "duration_days"
+    | "annual_rate"
+    | "settlement_rate_min"
+    | "settlement_rate_max"
   > | null;
 };
 
@@ -97,7 +126,9 @@ export default function StakingPage() {
     const [posRes, balRes] = await Promise.all([
       supabase
         .from("staking_positions")
-        .select("*, staking_products(name, product_type, duration_days, annual_rate)")
+        .select(
+          "*, staking_products(name, product_type, duration_days, annual_rate, settlement_rate_min, settlement_rate_max)",
+        )
         .eq("user_id", user.id)
         .order("started_at", { ascending: false }),
       supabase
@@ -118,8 +149,8 @@ export default function StakingPage() {
           : "-",
         amount: Number(p.amount),
         period: `${p.staking_products?.duration_days ?? 0}일`,
-        rate: p.staking_products?.annual_rate
-          ? formatRatePercent(Number(p.staking_products.annual_rate) * 100)
+        rate: p.staking_products
+          ? formatProductRate(p.staking_products)
           : "-",
         profit:
           Number(p.total_earned) > 0
@@ -301,7 +332,7 @@ export default function StakingPage() {
                     >
                       <span className="font-medium">{p.duration_days}일</span>
                       <span className="text-xs">
-                        예상 수익률 : {formatRatePercent(Number(p.annual_rate) * 100)}
+                        예상 수익률 : {formatProductRate(p)}
                       </span>
                     </button>
                   ))}
@@ -634,7 +665,7 @@ export default function StakingPage() {
                 <div className="text-yellow-500 font-medium">
                   {
                     selectedProduct
-                      ? formatRatePercent(Number(selectedProduct.annual_rate) * 100)
+                      ? formatProductRate(selectedProduct)
                       : "-"
                   }
                 </div>

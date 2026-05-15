@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { AdminButton } from "@/components/admin/ui/AdminForms";
 
@@ -23,14 +24,23 @@ export function AdminActionDropdown({
   options,
 }: AdminActionDropdownProps) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const enabledOptions = options.filter((option) => !option.disabled);
 
   useEffect(() => {
     if (!open) return;
 
     const handleOutside = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -48,14 +58,28 @@ export function AdminActionDropdown({
         size="sm"
         type="button"
         disabled={disabled || enabledOptions.length === 0}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          const rect = rootRef.current?.getBoundingClientRect();
+          if (rect) {
+            setMenuPosition({
+              left: Math.max(8, rect.right - 140),
+              top: rect.bottom + 4,
+            });
+          }
+          setOpen((current) => !current);
+        }}
         className="min-w-[76px] justify-between"
       >
         <span>{label}</span>
         <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
       </AdminButton>
-      {open ? (
-        <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] rounded-lg border border-gray-700 bg-[#1a1d26] py-1 shadow-xl">
+      {open && menuPosition
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-[9999] min-w-[140px] rounded-lg border border-gray-700 bg-[#1a1d26] py-1 shadow-xl"
+              style={{ left: menuPosition.left, top: menuPosition.top }}
+            >
           {options.map((option) => (
             <button
               key={option.label}
@@ -77,8 +101,10 @@ export function AdminActionDropdown({
               {option.label}
             </button>
           ))}
-        </div>
-      ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

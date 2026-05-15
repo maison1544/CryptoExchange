@@ -374,6 +374,25 @@ export function StakingListTab() {
           <AdminEmptyState message="조건에 맞는 스테이킹 내역이 없습니다." />
         ) : (
           <AdminTable
+            containerClassName="pb-2"
+            tableClassName="min-w-[1720px]"
+            columnClassNames={[
+              "w-24",
+              "w-24",
+              "w-56",
+              "w-28",
+              "w-24",
+              "w-20",
+              "w-40",
+              "w-32",
+              "w-24",
+              "w-24",
+              "w-32",
+              "w-32",
+              "w-24",
+              "w-24",
+              "w-28",
+            ]}
             headers={[
               "시작일",
               "만료일",
@@ -450,9 +469,10 @@ export function StakingListTab() {
                     {item.status}
                   </span>
                 </AdminTableCell>
-                <AdminTableCell>
+                <AdminTableCell className="text-center">
                   {item.status === "진행중" && (
                     <AdminActionDropdown
+                      className="justify-center"
                       disabled={isProcessing}
                       label="관리"
                       options={[
