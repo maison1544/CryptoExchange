@@ -6,6 +6,7 @@ import {
 } from "@/lib/utils/commission";
 import { formatDate, formatDateTime } from "@/lib/utils/formatDate";
 import { getPaginationBounds } from "@/lib/utils/pagination";
+import { sanitizePostgrestSearch } from "@/lib/utils/sanitizeSearch";
 
 type AgentRow = {
   id: string;
@@ -220,11 +221,7 @@ function toSafeNumber(value: number | string | null | undefined) {
 }
 
 function sanitizeSearchTerm(value: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  return value.trim().replace(/[,%()]/g, "");
+  return sanitizePostgrestSearch(value);
 }
 
 function normalizePageParam(value: string | null, fallback: number) {

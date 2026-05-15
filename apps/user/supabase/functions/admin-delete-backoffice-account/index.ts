@@ -29,6 +29,18 @@ Deno.serve(async (req: Request) => {
     if (typeof userId !== "string" || !userId) return jsonResponse({ error: "Invalid userId" }, 400);
     if (accountType === "admin" && userId === authData.user.id) return jsonResponse({ error: "Cannot delete own account" }, 400);
 
+    // Privilege-escalation guard: deleting admin accounts is restricted
+    // to super_admins. A regular admin who could remove a super_admin
+    // would either lock the org out or pave the way for a takeover. The
+    // 'cannot delete own account' check above is defense-in-depth for
+    // self-foot-gun, not a security boundary.
+    if (accountType === "admin" && adminRow.role !== "super_admin") {
+      return jsonResponse(
+        { error: "super_admin privileges required to delete admin accounts" },
+        403,
+      );
+    }
+
     // If deleting agent, detach members
     if (accountType === "agent") {
       await supabaseAdmin.from("user_profiles").update({ agent_id: null }).eq("agent_id", userId);

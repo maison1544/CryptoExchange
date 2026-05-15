@@ -319,6 +319,7 @@ export function AdminAccountsTab() {
             <AdminInput
               type="password"
               placeholder="6자 이상 입력"
+              autoComplete="new-password"
               value={form.password}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setForm({ ...form, password: e.target.value })

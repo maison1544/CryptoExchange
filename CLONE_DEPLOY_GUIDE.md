@@ -166,32 +166,86 @@ pnpm install
 | 순서 | 내용 | 소요 시간 |
 |------|------|----------|
 | Step 1 | 확장 모듈 활성화 (`pgcrypto`, `pg_stat_statements`) | 1분 |
-| Step 2 | 17개 테이블 생성 | 3분 |
-| Step 3 | 17개 인덱스 생성 | 1분 |
-| Step 4 | RLS 활성화 + 22개 정책 | 5분 |
-| Step 5 | 13개 RPC 함수 (`SECURITY DEFINER`) | 10분 |
+| Step 2 | 19개 테이블 생성 (`futures_orders` 포함) | 3분 |
+| Step 3 | 20개 인덱스 생성 | 1분 |
+| Step 4 | RLS 활성화 + 정책 (Step 7+8 후 49개로 수렴) | 5분 |
+| Step 5 | 17개 RPC 함수 (`SECURITY DEFINER` — `fill_limit_order` 포함) | 10분 |
 | Step 6 | Seed 데이터 (코인·서비스·관리자 메뉴 등) | 2분 |
-| Step 9 | 검증 쿼리 (테이블·정책·함수 카운트) | 1분 |
+| **Step 7 (필수)** | **🔒 1차 하드닝: RPC EXECUTE 회수 + `search_path` 고정 + `login_logs` RLS 강화** (`supabase_migration.md` §9.5) | 2분 |
+| **Step 8 (필수)** | **🔒 2차 하드닝: RLS INSERT/UPDATE 컬럼-무제한 정책 7건 제거 + `notifications` INSERT 정책 강화** (`supabase_migration.md` §9.6) | 2분 |
+| **Step 8B (필수)** | **🔒 3차 하드닝: Edge Function 4종에 `super_admin` 가드 적용 후 재배포 (권한 상승 차단)** (`supabase_migration.md` §9.7) | 1분 |
+| Step 9 | 검증 쿼리 (테이블·정책·함수 카운트 + 보안 정책 잔존 체크) | 1분 |
+
+> 🚨 **Step 7 누락 시 치명적 취약점**: Step 5에서 생성된 17개 SECURITY DEFINER RPC는 기본값으로 `anon`/`authenticated` 가 EXECUTE 가능합니다. 이 상태에서는 로그인만 한 임의 사용자가 `/rest/v1/rpc/adjust_user_balance` 등을 직접 호출하여 잔액을 임의로 가산하거나 본인의 입출금을 자체 승인할 수 있습니다.
+>
+> 🚨 **Step 8 누락 시 치명적 취약점**: PostgreSQL RLS 의 `WITH CHECK` 절은 행 단위 조건만 보고 컬럼 변경 여부는 보지 않습니다. Step 4 가 만든 `users_insert_own_positions`, `profiles_update_own`, `deposits_insert_own`, `withdrawals_insert_own` 등은 표면적으로 "본인 행만 쓸 수 있음" 처럼 보이지만 실제로는 본인 행의 모든 컬럼을 임의 값으로 INSERT/UPDATE 할 수 있게 합니다. 사용자가 가짜 `futures_positions` 행을 생성한 뒤 `/api/futures/close` 로 시장가 정산을 유도해 자유 출금을 발생시키거나, `user_profiles.wallet_balance` 를 직접 변조하는 익스플로잇이 가능합니다.
+>
+> **반드시 Step 7 (`harden_rpc_security_2026_05`) 과 Step 8 (`harden_rls_writes_2026_05`) 을 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6 참고.
 
 ### 4.3 검증 쿼리 (필수)
 
 `supabase_migration.md` Step 9의 다음 쿼리들로 마이그레이션 무결성을 확인:
 
 ```sql
--- 테이블 17개
+-- 테이블 19개 (futures_orders 포함)
 SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
 
--- RLS 활성화된 테이블 17개
+-- RLS 활성화된 테이블 19개
 SELECT COUNT(*) FROM pg_tables
 WHERE schemaname = 'public' AND rowsecurity = true;
 
--- 정책 22개
+-- 정책 49개 (Step 7+8 적용 후, 위험 정책 7건 제거된 상태)
 SELECT COUNT(*) FROM pg_policies WHERE schemaname = 'public';
 
--- RPC 함수 13개
+-- RPC 함수 17개 (fill_limit_order 포함)
 SELECT COUNT(*) FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public' AND p.prokind = 'f';
+
+-- ✅ Step 7 검증: 민감 RPC가 anon/authenticated 에서 EXECUTE 권한 회수됐는지
+SELECT p.proname,
+       array_agg(DISTINCT g.grantee::text ORDER BY g.grantee::text)
+         FILTER (WHERE g.grantee IS NOT NULL) AS grantees
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+LEFT JOIN information_schema.routine_privileges g
+  ON g.routine_name = p.proname AND g.routine_schema = n.nspname
+WHERE n.nspname = 'public'
+  AND p.proname IN ('adjust_user_balance', 'adjust_futures_balance',
+                    'request_withdrawal', 'process_deposit',
+                    'process_withdrawal', 'transfer_balance',
+                    'get_admin_dashboard_stats', 'fill_limit_order')
+GROUP BY p.proname
+ORDER BY p.proname;
+-- 모든 행이 {postgres, service_role} 만 보여야 합니다.
+-- anon, authenticated, public 이 보이면 Step 7 누락.
+
+-- ✅ Step 7 검증: login_logs RLS 정책이 auth.uid()=user_id 로 좁혀졌는지
+SELECT policyname, with_check FROM pg_policies
+WHERE schemaname = 'public' AND tablename = 'login_logs' AND cmd = 'INSERT';
+-- with_check 가 '(auth.uid() = user_id)' 여야 합니다 ('true' 가 아님).
+
+-- ✅ Step 8 검증: 위험 RLS 정책 7건이 모두 제거됐는지
+SELECT tablename, policyname, cmd
+FROM pg_policies
+WHERE schemaname='public'
+  AND policyname IN (
+    'notif_insert_system',
+    'profiles_update_own',
+    'users_insert_own_positions',
+    'users_update_own_positions',
+    'deposits_insert_own',
+    'withdrawals_insert_own',
+    'agent_wd_insert',
+    'agents_insert_own_withdrawal'
+  );
+-- 결과 0건이어야 합니다. 한 건이라도 보이면 Step 8 누락.
+
+-- ✅ Step 8 검증: 새로 좁혀진 notifications INSERT 정책
+SELECT policyname, with_check FROM pg_policies
+WHERE schemaname='public' AND tablename='notifications' AND cmd='INSERT';
+-- with_check:
+--   '((auth.uid() = user_id) OR (EXISTS ( SELECT 1 FROM admins WHERE (admins.id = auth.uid()))))'
 ```
 
 > ⚠️ 카운트가 다르다면 마이그레이션이 중간에 실패한 것입니다. SQL Editor 출력에서 에러 메시지를 확인하여 누락된 단계를 재실행하세요.
@@ -457,6 +511,103 @@ vercel cron run /api/cron/execute-pending-orders
 
 또는 대시보드 **Cron Jobs → Run**.
 
+### 10.5 🔒 RLS + Edge Function 모의 침투 (Step 7+8+8B 적용 검증)
+
+**일반 사용자 계정**으로 로그인한 뒤, 브라우저 콘솔에서 다음을 차례로 실행하여 모두 **에러를 반환**하는지 확인합니다. 한 건이라도 성공하면 Step 7 또는 Step 8 SQL 이 누락된 것입니다.
+
+```js
+// 0) 먼저 현재 사용자의 JWT 와 user.id 확보
+const { data: { session } } = await window.supabase.auth.getSession();
+const me = session.user.id;
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL; // 또는 콘솔에 직접 입력
+const headers = {
+  apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${session.access_token}`,
+  "Content-Type": "application/json",
+};
+
+// 1) Step 7: 민감 RPC 직접 호출 차단
+await fetch(`${url}/rest/v1/rpc/adjust_user_balance`, {
+  method: "POST", headers,
+  body: JSON.stringify({ p_user_id: me, p_amount: 999999, p_reason: "h4x" }),
+}).then(r => r.status); // 기대: 401 또는 404 ("Not Found" / "permission denied")
+
+// 2) Step 8: 가짜 포지션 INSERT 차단
+await fetch(`${url}/rest/v1/futures_positions`, {
+  method: "POST", headers,
+  body: JSON.stringify({
+    user_id: me, symbol: "BTCUSDT", direction: "long",
+    size: 100, entry_price: 1, margin: 100, status: "open",
+  }),
+}).then(r => r.status); // 기대: 401 또는 403 (정책 없음)
+
+// 3) Step 8: 자기 잔액 변조 차단
+await fetch(`${url}/rest/v1/user_profiles?id=eq.${me}`, {
+  method: "PATCH", headers,
+  body: JSON.stringify({ wallet_balance: 999999999 }),
+}).then(r => r.status); // 기대: 401 또는 403
+
+// 4) Step 8: 알림 위조 차단 (다른 사용자 ID 로 INSERT)
+await fetch(`${url}/rest/v1/notifications`, {
+  method: "POST", headers,
+  body: JSON.stringify({
+    user_id: "00000000-0000-0000-0000-000000000000",
+    title: "fake", body: "fake", type: "info",
+  }),
+}).then(r => r.status); // 기대: 401 또는 403 (자기 user_id 만 허용)
+```
+
+추가로 **일반 admin (role='admin') 계정** 으로 로그인한 뒤, 백오피스 권한 상승 시도가 모두 403 으로 차단되는지 확인합니다.
+
+```js
+// 5) Step 8B: 일반 admin 이 새 super_admin 생성 시도 (권한 상승)
+await fetch(`${url}/functions/v1/admin-create-backoffice-account`, {
+  method: "POST", headers,
+  body: JSON.stringify({
+    accountType: "admin", role: "super_admin",
+    username: "evil", name: "evil", password: "abcdef",
+  }),
+}).then(r => r.status); // 기대: 403
+
+// 6) Step 8B: 다른 super_admin 의 비밀번호 변경 시도 (계정 탈취)
+await fetch(`${url}/functions/v1/admin-update-user-password`, {
+  method: "POST", headers,
+  body: JSON.stringify({
+    userId: "<super_admin uuid>",
+    newPassword: "h4ck3rwins",
+  }),
+}).then(r => r.status); // 기대: 403
+
+// 7) Step 8B: 다른 super_admin 강제 로그아웃 시도 (락아웃 DoS)
+await fetch(`${url}/functions/v1/admin-force-logout`, {
+  method: "POST", headers,
+  body: JSON.stringify({ userId: "<super_admin uuid>" }),
+}).then(r => r.status); // 기대: 403
+
+// 8) Step 8B: 다른 admin 삭제 시도
+await fetch(`${url}/functions/v1/admin-delete-backoffice-account`, {
+  method: "POST", headers,
+  body: JSON.stringify({ accountType: "admin", userId: "<admin uuid>" }),
+}).then(r => r.status); // 기대: 403
+```
+
+`super_admin` 으로 같은 호출을 보내면 모두 200 으로 정상 처리되어야 합니다 (즉, 가드는 권한 위계만 강제하고 정상 운영을 막지 않습니다).
+
+성공해야 할 정상 흐름은:
+- 일반 사용자가 본인 알림 INSERT (위 4번에서 `user_id: me` 로 보내면 200) ✅
+- 사용자가 본인 알림 SELECT (`GET /rest/v1/notifications?user_id=eq.${me}`) ✅
+- 입출금/포지션/스테이킹 등 **모든 쓰기는 `/api/...` 서버 라우트만 통과**해야 함.
+
+### 10.6 ⚠️ Supabase 콘솔 보안 토글 (수동)
+
+다음은 SQL 로 변경 불가능하며 Supabase 대시보드에서 직접 켜야 합니다.
+
+- [ ] **Authentication → Policies → "Leaked Password Protection"** ON
+      (HaveIBeenPwned 누출 비밀번호 차단)
+- [ ] **Authentication → Email Templates** 에서 사이트 도메인이 정확히 들어가 있는지
+- [ ] **Authentication → URL Configuration → Site URL** 이 production 도메인으로 설정
+- [ ] **API → Settings → JWT Expiry** 가 적정값 (3600s 권장)
+
 ---
 
 ## 11. 트러블슈팅 (자주 발생하는 함정)
@@ -625,8 +776,12 @@ HAVING ABS(
 
 [ Supabase ]
 □ 새 프로젝트 생성 → URL / anon / service_role 키 복사
-□ supabase_migration.md Step 1~9 SQL Editor 실행
-□ 검증 쿼리: 테이블 17, 정책 22, RPC 13 일치 확인
+□ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B 모두 포함)
+□ 검증 쿼리: 테이블 19, RLS 19, 정책 49, RPC 17 일치 확인
+□ Step 7 검증: 민감 RPC EXECUTE 가 service_role 한정인지 (Step 4.3 쿼리)
+□ Step 8 검증: 위험 RLS 정책 7건이 모두 제거되었는지 (Step 4.3 쿼리)
+□ Step 8B 검증: Edge Function 4종의 최신 코드(super_admin 가드 포함)가 배포되었는지
+□ Authentication → "Leaked Password Protection" 토글 ON (HIBP 검사)
 
 [ 로컬 ]
 □ git clone <repo>
@@ -659,6 +814,8 @@ HAVING ABS(
 □ Cron 5분 후 실행 이력 확인
 □ 관리자 로그아웃 → /admin/login 으로 이동
 □ 모바일 거래 페이지 진입 즉시 차트 표시 (탭 클릭 불필요)
+□ 🔒 §10.5 의 RLS + 권한상승 모의 침투 8종 모두 차단되는지 (Step 7+8+8B 적용 검증)
+□ 🔒 로그인/회원가입 폼이 method="post" 로 제출되는지 (URL에 password 노출 없음)
 
 [ 마무리 ]
 □ git tag v1.0.0-clone && git push --tags
@@ -678,5 +835,5 @@ HAVING ABS(
 
 ---
 
-문서 최종 업데이트: 2026-05-14
-관련 문서: `supabase_migration.md`, `partner_migration.md`
+문서 최종 업데이트: 2026-05-15 (Step 8B Edge Function 권한상승 가드 추가; 카운트 19/19/49/17)
+관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7), `partner_migration.md`

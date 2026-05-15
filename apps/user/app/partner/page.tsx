@@ -733,23 +733,47 @@ function LegacyPartnerPage() {
                       return;
                     }
                     setIsSubmittingWithdraw(true);
-                    const { error } = await supabase
-                      .from("withdrawals")
-                      .insert({
-                        user_id: null,
-                        agent_id: user.id,
-                        withdrawal_type: "agent",
-                        amount: amt,
-                        bank: bankInfo.bank_name,
-                        account_number: bankInfo.bank_account,
-                        account_holder: bankInfo.bank_account_holder,
-                        status: "pending",
-                      });
+                    // Route through the server-side endpoint so the agent
+                    // commission balance is verified atomically. The
+                    // previous client-side .from("withdrawals").insert()
+                    // bypassed balance/limit checks and only relied on
+                    // RLS WITH CHECK (agent_id = auth.uid()), allowing a
+                    // partner to request more than they had earned.
+                    let serverError: string | null = null;
+                    try {
+                      const {
+                        data: { session },
+                      } = await supabase.auth.getSession();
+                      if (!session?.access_token) {
+                        serverError = "로그인이 필요합니다.";
+                      } else {
+                        const response = await fetch("/api/partner", {
+                          method: "POST",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${session.access_token}`,
+                          },
+                          body: JSON.stringify({
+                            action: "request-withdrawal",
+                            amount: amt,
+                          }),
+                        });
+                        const payload = await response.json().catch(() => null);
+                        if (!response.ok || !payload?.success) {
+                          serverError =
+                            payload?.error ||
+                            "출금 신청 중 오류가 발생했습니다.";
+                        }
+                      }
+                    } catch (err) {
+                      serverError =
+                        err instanceof Error ? err.message : String(err);
+                    }
                     setIsSubmittingWithdraw(false);
-                    if (error) {
+                    if (serverError) {
                       addToast({
                         title: "출금 신청 실패",
-                        message: "출금 신청 중 오류: " + error.message,
+                        message: "출금 신청 중 오류: " + serverError,
                         type: "error",
                       });
                       return;

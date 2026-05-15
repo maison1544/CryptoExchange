@@ -80,6 +80,53 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Stage 2.5: defensive mark-price check ──
+    // Verify the current mark price has actually reached the position's
+    // liquidation price. Without this check any user could call this
+    // endpoint to forcibly realize a loss (and pay a loss commission to
+    // their agent) regardless of the real market price — useful for
+    // collusive money-laundering between an agent and a user.
+    const liquidationPrice = Number(pos.liquidation_price);
+    if (!Number.isFinite(liquidationPrice) || liquidationPrice <= 0) {
+      return NextResponse.json(
+        { error: "Position has no valid liquidation price" },
+        { status: 400 },
+      );
+    }
+
+    const { data: markRow } = await admin
+      .from("mark_prices")
+      .select("mark_price, updated_at")
+      .eq("symbol", pos.symbol)
+      .maybeSingle();
+
+    const markPrice = Number(markRow?.mark_price ?? 0);
+    if (!Number.isFinite(markPrice) || markPrice <= 0) {
+      return NextResponse.json(
+        { error: "Mark price unavailable for this symbol" },
+        { status: 503 },
+      );
+    }
+
+    const reached =
+      pos.direction === "long"
+        ? markPrice <= liquidationPrice
+        : pos.direction === "short"
+          ? markPrice >= liquidationPrice
+          : false;
+
+    if (!reached) {
+      return NextResponse.json(
+        {
+          error: "Liquidation price has not been reached",
+          markPrice,
+          liquidationPrice,
+          direction: pos.direction,
+        },
+        { status: 400 },
+      );
+    }
+
     // ── Stage 3: update position (with optimistic lock) ──
     const pnl = -Number(pos.margin);
 

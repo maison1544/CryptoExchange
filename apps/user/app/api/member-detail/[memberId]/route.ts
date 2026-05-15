@@ -61,54 +61,17 @@ export async function GET(req: NextRequest, context: RouteContext) {
   const loginLogSelect =
     "id, login_at, ip_address, user_agent, success, failure_reason";
 
-  // Stage 1: Auth + ALL data queries in a single parallel batch.
-  // Data queries use the service-role key and don't need the caller's
-  // identity, so they can run concurrently with auth.getUser.
-  const [
-    authResult,
-    profileResult,
-    deposits,
-    withdrawals,
-    positions,
-    stakings,
-    loginLogs,
-  ] = await Promise.all([
+  // Stage 1: Auth + minimal profile fetch (only the agent_id is needed
+  // for role-based access checks). Data queries are deferred until the
+  // caller proves authorization, so an unauthorized request never causes
+  // the database to materialize private trading/login history.
+  const [authResult, profileResult] = await Promise.all([
     supabaseAdmin.auth.getUser(jwt),
     supabaseAdmin
       .from("user_profiles")
       .select(profileSelect)
       .eq("id", memberId)
       .maybeSingle(),
-    supabaseAdmin
-      .from("deposits")
-      .select(depositSelect)
-      .eq("user_id", memberId)
-      .order("created_at", { ascending: false })
-      .limit(RECENT_LIMIT),
-    supabaseAdmin
-      .from("withdrawals")
-      .select(withdrawalSelect)
-      .eq("user_id", memberId)
-      .order("created_at", { ascending: false })
-      .limit(RECENT_LIMIT),
-    supabaseAdmin
-      .from("futures_positions")
-      .select(positionSelect)
-      .eq("user_id", memberId)
-      .order("opened_at", { ascending: false })
-      .limit(RECENT_LIMIT),
-    supabaseAdmin
-      .from("staking_positions")
-      .select(stakingSelect)
-      .eq("user_id", memberId)
-      .order("started_at", { ascending: false })
-      .limit(RECENT_LIMIT),
-    supabaseAdmin
-      .from("login_logs")
-      .select(loginLogSelect)
-      .eq("user_id", memberId)
-      .order("login_at", { ascending: false })
-      .limit(RECENT_LIMIT),
   ]);
 
   const user = authResult.data?.user;
@@ -127,7 +90,8 @@ export async function GET(req: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Member not found" }, { status: 404 });
   }
 
-  // Stage 2: Fast role check (only runs after auth resolves)
+  // Stage 2: Authorization. Self, admins, and the owning agent are the
+  // only roles that may view a member's full history.
   const isOwner = user.id === memberId;
   if (!isOwner) {
     const [{ data: adminRow }, { data: agentRow }] = await Promise.all([
@@ -141,6 +105,41 @@ export async function GET(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }
+
+  // Stage 3: Authorized — now fetch the heavy related data in parallel.
+  const [deposits, withdrawals, positions, stakings, loginLogs] =
+    await Promise.all([
+      supabaseAdmin
+        .from("deposits")
+        .select(depositSelect)
+        .eq("user_id", memberId)
+        .order("created_at", { ascending: false })
+        .limit(RECENT_LIMIT),
+      supabaseAdmin
+        .from("withdrawals")
+        .select(withdrawalSelect)
+        .eq("user_id", memberId)
+        .order("created_at", { ascending: false })
+        .limit(RECENT_LIMIT),
+      supabaseAdmin
+        .from("futures_positions")
+        .select(positionSelect)
+        .eq("user_id", memberId)
+        .order("opened_at", { ascending: false })
+        .limit(RECENT_LIMIT),
+      supabaseAdmin
+        .from("staking_positions")
+        .select(stakingSelect)
+        .eq("user_id", memberId)
+        .order("started_at", { ascending: false })
+        .limit(RECENT_LIMIT),
+      supabaseAdmin
+        .from("login_logs")
+        .select(loginLogSelect)
+        .eq("user_id", memberId)
+        .order("login_at", { ascending: false })
+        .limit(RECENT_LIMIT),
+    ]);
 
   const firstError = [
     deposits.error,

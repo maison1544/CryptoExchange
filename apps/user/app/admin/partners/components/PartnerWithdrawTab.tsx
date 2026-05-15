@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
 import { processWithdrawal } from "@/lib/api/admin";
+import { sanitizePostgrestSearch } from "@/lib/utils/sanitizeSearch";
 import {
   getPaginationBounds,
   normalizeTotalPages,
@@ -88,7 +89,9 @@ export function PartnerWithdrawTab() {
 
     try {
       await supabase.auth.getSession();
-      const trimmedSearch = search.trim();
+      // Strip PostgREST filter metacharacters before interpolating
+      // search into .or(`account_number.ilike.%${...}%,agent_id.in.(...)`).
+      const trimmedSearch = sanitizePostgrestSearch(search);
       let query = supabase
         .from("withdrawals")
         .select(

@@ -175,23 +175,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(
-      "request_deposit",
-      {
-        p_user_id: user.id,
-        p_amount: amount,
-        p_depositor_name: depositorName,
-      },
-    );
+    // Insert a pending deposit row directly. Balance is not changed here —
+    // an admin must approve via process_deposit() before user balance moves.
+    // We previously called a `request_deposit` RPC that does not exist in
+    // the database, which caused this route to always fail.
+    const { data: insertedDeposit, error: depositInsertError } =
+      await supabaseAdmin
+        .from("deposits")
+        .insert({
+          user_id: user.id,
+          amount,
+          depositor_name: depositorName,
+          status: "pending",
+        })
+        .select("id, status, amount, created_at")
+        .single();
 
-    const responseBody = rpcError
-      ? { success: false, error: rpcError.message }
-      : ((rpcResult as Record<string, unknown> | null) ?? { success: true });
-    const responseCode = rpcError
-      ? 500
-      : responseBody.success === false
-        ? 400
-        : 200;
+    const responseBody = depositInsertError
+      ? { success: false, error: depositInsertError.message }
+      : { success: true, deposit: insertedDeposit };
+    const responseCode = depositInsertError ? 500 : 200;
 
     await supabaseAdmin
       .from("api_idempotency_keys")

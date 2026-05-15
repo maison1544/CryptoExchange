@@ -56,7 +56,12 @@ export default function AdminLoginPage() {
         </div>
 
         <div className="bg-[#1a1d26] border border-gray-800 rounded-2xl p-8">
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form
+            onSubmit={handleSubmit}
+            method="post"
+            action="/admin/login"
+            className="space-y-5"
+          >
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 이메일

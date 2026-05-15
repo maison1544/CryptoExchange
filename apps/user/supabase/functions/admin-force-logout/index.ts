@@ -19,12 +19,31 @@ Deno.serve(async (req: Request) => {
     if (authError || !authData?.user) return jsonResponse({ error: "Invalid auth token" }, 401);
 
     const { data: adminRow } = await supabaseAdmin
-      .from("admins").select("id").eq("id", authData.user.id).maybeSingle();
+      .from("admins").select("id, role").eq("id", authData.user.id).maybeSingle();
     if (!adminRow) return jsonResponse({ error: "Admin privileges required" }, 403);
 
     const body = await req.json().catch(() => null);
     const userId = body?.userId;
     if (typeof userId !== "string" || !userId) return jsonResponse({ error: "Invalid userId" }, 400);
+
+    // Privilege-escalation / DoS guard: a regular admin must not be able
+    // to log out another backoffice user (admin or agent). That would
+    // both let them lock a super_admin out of the system and serve as a
+    // recon primitive for whether a particular UUID maps to a backoffice
+    // account. Forcing logout on a normal user remains available to all
+    // admins.
+    if (adminRow.role !== "super_admin") {
+      const [{ data: targetAdmin }, { data: targetAgent }] = await Promise.all([
+        supabaseAdmin.from("admins").select("id").eq("id", userId).maybeSingle(),
+        supabaseAdmin.from("agents").select("id").eq("id", userId).maybeSingle(),
+      ]);
+      if (targetAdmin || targetAgent) {
+        return jsonResponse(
+          { error: "super_admin privileges required to log out backoffice users" },
+          403,
+        );
+      }
+    }
 
     // Revoke all sessions via Auth Admin API
     const endpoint = `${supabaseUrl}/auth/v1/admin/users/${userId}/logout?scope=global`;

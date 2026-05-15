@@ -55,7 +55,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: adminRow } = await supabaseAdmin
       .from("admins")
-      .select("id")
+      .select("id, role")
       .eq("id", authData.user.id)
       .maybeSingle();
     if (!adminRow)
@@ -79,6 +79,18 @@ Deno.serve(async (req: Request) => {
 
     if (accountType !== "admin" && accountType !== "agent")
       return jsonResponse({ error: "Invalid accountType" }, 400);
+
+    // Privilege-escalation guard: creating new admin accounts (especially
+    // super_admin ones) is restricted to existing super_admins. A regular
+    // admin who could create another super_admin account would effectively
+    // be able to elevate their own privileges by signing in as the new
+    // account.
+    if (accountType === "admin" && adminRow.role !== "super_admin") {
+      return jsonResponse(
+        { error: "super_admin privileges required to create admin accounts" },
+        403,
+      );
+    }
     if (!username || username.trim().length < 3)
       return jsonResponse({ error: "Invalid username" }, 400);
     if (!name || !name.trim())

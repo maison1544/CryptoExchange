@@ -34,6 +34,7 @@ import {
   processWithdrawal,
 } from "@/lib/api/admin";
 import { formatDateTime } from "@/lib/utils/formatDate";
+import { sanitizePostgrestSearch } from "@/lib/utils/sanitizeSearch";
 import {
   formatDisplayNumber,
   formatKrw,
@@ -355,8 +356,9 @@ export default function AdminHistoryPage() {
         totalCount: 0,
       };
     }
-
-    const trimmedSearch = searchTerm.trim();
+    // Strip PostgREST filter metacharacters before interpolating into
+    // .or(`...${trimmedSearch}...`) templates below.
+    const trimmedSearch = sanitizePostgrestSearch(searchTerm);
     const { from, to } = getPaginationBounds(resolvedCurrentPage, PAGE_SIZE);
     const pageWindowSize = resolvedCurrentPage * PAGE_SIZE;
 

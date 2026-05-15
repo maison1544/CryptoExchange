@@ -29,6 +29,7 @@ import {
 import { Search, AlertTriangle, Plus, Minus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { updateUserPassword } from "@/lib/api/admin";
+import { adjustAdminMemberBalance } from "@/lib/api/adminDashboard";
 import type { DbUserProfile } from "@/lib/types/database";
 import { formatDateTime } from "@/lib/utils/formatDate";
 import { toDisplayIp } from "@/lib/utils/ip";
@@ -1371,6 +1372,7 @@ export function MemberListTab() {
                         className="w-full"
                         placeholder="변경시에만 입력"
                         id="edit-password"
+                        autoComplete="new-password"
                       />
                     </div>
                     <div>
@@ -1382,6 +1384,7 @@ export function MemberListTab() {
                         className="w-full"
                         placeholder="변경시에만 입력"
                         id="edit-password-confirm"
+                        autoComplete="new-password"
                       />
                     </div>
                   </div>

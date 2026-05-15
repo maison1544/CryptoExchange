@@ -124,17 +124,11 @@ export async function processWithdrawal(
   });
 }
 
-export async function adjustUserBalance(
-  userId: string,
-  amount: number,
-  reason?: string,
-) {
-  return supabase.rpc("adjust_user_balance", {
-    p_user_id: userId,
-    p_amount: amount,
-    p_reason: reason ?? "admin_adjustment",
-  });
-}
+// `adjustUserBalance` previously called `supabase.rpc("adjust_user_balance")`
+// directly from the browser. The EXECUTE privilege on that RPC is now
+// restricted to service_role; admin-side balance adjustments must go
+// through `/api/admin/members/balance` (see lib/api/adminDashboard.ts).
+// The dead helper has been removed to prevent regressions.
 
 export async function manageFuturesPosition(
   positionId: string | number,
@@ -218,6 +212,8 @@ export async function settleStaking(stakingId: number) {
   });
 }
 
-export async function getDashboardStats() {
-  return supabase.rpc("get_admin_dashboard_stats");
-}
+// `getDashboardStats` previously called `supabase.rpc("get_admin_dashboard_stats")`
+// directly from the browser. The EXECUTE privilege on that RPC is now
+// restricted to service_role; use `fetchAdminDashboardStats()` in
+// `lib/api/adminDashboard.ts` instead, which routes through the
+// authenticated `/api/admin/dashboard/stats` endpoint.

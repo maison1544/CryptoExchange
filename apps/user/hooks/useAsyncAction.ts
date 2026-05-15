@@ -53,6 +53,21 @@ export function useAsyncAction<TArgs extends unknown[], TReturn>(
 
   const run = useCallback(
     async (...args: TArgs): Promise<TReturn | undefined> => {
+      // Critical: when this hook wraps a form `onSubmit` handler, we must
+      // call `preventDefault()` BEFORE the throttle / in-flight guards.
+      // Otherwise, a re-click within the throttle window or while a
+      // previous submit is in-flight would short-circuit the underlying
+      // function, never call `preventDefault()`, and let the browser's
+      // native form submission proceed — which on a login form leaks the
+      // password into the URL query string. This guard is a no-op for
+      // non-event arguments.
+      const first = args[0] as
+        | { preventDefault?: () => void; stopPropagation?: () => void }
+        | undefined;
+      if (first && typeof first.preventDefault === "function") {
+        first.preventDefault();
+      }
+
       const now = Date.now();
       if (inFlightRef.current) {
         return undefined;

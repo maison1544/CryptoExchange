@@ -1032,6 +1032,7 @@ export function PartnerListTab() {
               <AdminInput
                 type="password"
                 placeholder="비밀번호 입력"
+                autoComplete="new-password"
                 className="w-full"
                 value={newPartnerForm.password}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>

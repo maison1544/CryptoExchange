@@ -19,7 +19,7 @@ Deno.serve(async (req: Request) => {
     if (authError || !authData?.user) return jsonResponse({ error: "Invalid auth token" }, 401);
 
     const { data: adminRow } = await supabaseAdmin
-      .from("admins").select("id").eq("id", authData.user.id).maybeSingle();
+      .from("admins").select("id, role").eq("id", authData.user.id).maybeSingle();
     if (!adminRow) return jsonResponse({ error: "Admin privileges required" }, 403);
 
     const body = await req.json().catch(() => null);
@@ -27,6 +27,24 @@ Deno.serve(async (req: Request) => {
 
     if (typeof userId !== "string" || !userId) return jsonResponse({ error: "Invalid userId" }, 400);
     if (typeof newPassword !== "string" || newPassword.length < 6) return jsonResponse({ error: "비밀번호를 6자리 이상 입력해야 합니다." }, 400);
+
+    // Privilege-escalation guard: a regular admin must not be able to
+    // change another backoffice user's password (admin or agent), which
+    // would let them sign in as that account. Only super_admins can
+    // reset backoffice passwords. Resetting a regular user's password
+    // remains available to all admins.
+    if (adminRow.role !== "super_admin") {
+      const [{ data: targetAdmin }, { data: targetAgent }] = await Promise.all([
+        supabaseAdmin.from("admins").select("id").eq("id", userId).maybeSingle(),
+        supabaseAdmin.from("agents").select("id").eq("id", userId).maybeSingle(),
+      ]);
+      if (targetAdmin || targetAgent) {
+        return jsonResponse(
+          { error: "super_admin privileges required to reset backoffice passwords" },
+          403,
+        );
+      }
+    }
 
     const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password: newPassword });
     if (error) return jsonResponse({ error: error.message }, 400);

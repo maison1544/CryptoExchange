@@ -494,15 +494,29 @@ export default function StakingPage() {
                       );
                     }
 
-                    await supabase.from("notifications").insert({
-                      user_id: user.id,
-                      title: "스테이킹 신청 완료",
-                      body: `${formatUsdt(numAmount, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}를 ${selectedPeriod}일 스테이킹 신청했습니다.`,
-                      type: "staking",
-                    });
+                    // Best-effort notification — failures here must not
+                    // break the staking flow. Server route enforces RLS
+                    // (auth.uid() = user_id) so we no longer rely on
+                    // permissive policies.
+                    try {
+                      await fetch("/api/notifications", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${session.access_token}`,
+                        },
+                        body: JSON.stringify({
+                          title: "스테이킹 신청 완료",
+                          body: `${formatUsdt(numAmount, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}를 ${selectedPeriod}일 스테이킹 신청했습니다.`,
+                          type: "staking",
+                        }),
+                      });
+                    } catch {
+                      /* notification is non-critical */
+                    }
 
                     setShowConfirmModal(false);
                     setAmount("");

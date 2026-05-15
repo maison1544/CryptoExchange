@@ -61,31 +61,13 @@ export function useSupabaseQuery<T>(
   return { data, loading, error, refetch: fetch };
 }
 
-export function useSupabaseRpc<T>(fnName: string, params?: Record<string, unknown>) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { data: result, error: err } = await supabase.rpc(fnName, params);
-      if (err) setError(err.message);
-      else setData(result as T);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  }, [fnName]);
-
-  useEffect(() => {
-    fetch();
-  }, [fetch]);
-
-  return { data, loading, error, refetch: fetch };
-}
+// `useSupabaseRpc` was removed in the security hardening pass. Direct
+// RPC calls from the browser are no longer permitted; sensitive RPCs
+// have had their EXECUTE privilege revoked from `anon`/`authenticated`,
+// and all callable flows go through `/api/...` server routes that use
+// the service-role key. Re-introducing a generic client RPC helper
+// would invite future regressions, so the helper is intentionally not
+// available.
 
 export function useUserProfile() {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
