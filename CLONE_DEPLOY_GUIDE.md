@@ -175,7 +175,7 @@ pnpm install
 | **Step 8 (필수)** | **🔒 2차 하드닝: RLS INSERT/UPDATE 컬럼-무제한 정책 7건 제거 + `notifications` INSERT 정책 강화** (`supabase_migration.md` §9.6) | 2분 |
 | **Step 8B (필수)** | **🔒 3차 하드닝: Edge Function 4종에 `super_admin` 가드 적용 후 재배포 (권한 상승 차단)** (`supabase_migration.md` §9.7) | 1분 |
 | **Step 8C (필수)** | **🔒 4차 하드닝: 인증 Rate-Limit DB 게이트 4종 (login / signup / duplicate-check / is_admin 열거 차단)** (`supabase_migration.md` §9.8) | 2분 |
-| **Step 8D (필수)** | **🔒 5차 감사·최적화 패치: 레거시 RPC 오버로드 제거 + Dead Edge Function 4종 410 stub + 3종 service-role 테이블 explicit DENY + Realtime publication + FK 인덱스 9개 + RLS InitPlan 일괄 최적화** (`supabase_migration.md` §9.9) | 3분 |
+| **Step 8D (필수)** | **🔒 5차 감사·최적화 패치: 레거시 RPC 오버로드 제거 + Dead Edge Function 4종 410 stub + 4종 service-role 테이블 explicit DENY + Realtime publication + FK 인덱스 9개 + RLS InitPlan/permissive policy 최적화** (`supabase_migration.md` §9.9) | 3분 |
 | Step 9 | 검증 쿼리 (테이블·정책·함수 카운트 + 보안 정책 잔존 체크) | 1분 |
 
 > 🚨 **Step 7 누락 시 치명적 취약점**: Step 5에서 생성된 17개 SECURITY DEFINER RPC는 기본값으로 `anon`/`authenticated` 가 EXECUTE 가능합니다. 이 상태에서는 로그인만 한 임의 사용자가 `/rest/v1/rpc/adjust_user_balance` 등을 직접 호출하여 잔액을 임의로 가산하거나 본인의 입출금을 자체 승인할 수 있습니다.
@@ -186,7 +186,7 @@ pnpm install
 >
 > 🚨 **Step 8D 누락 시 영향**: (a) `/api/admin/wallet/manage` 가 레거시 3-arg `process_deposit/process_withdrawal` 오버로드를 호출해 **승인된 입출금이 wallet_transactions 감사 테이블에 기록되지 않고 처리 admin UID 도 남지 않습니다** — 자금 이상 시 책임 추적 불가. (b) Dead Edge Function 4종(`user-signup`, `user-record-login`, `backoffice-record-login`, `validate-referral-code`) 이 verify_jwt=false 또는 미사용 상태로 prod 에 노출되어 무한 계정 생성·agent UID enumeration 공격면이 잔존합니다. (c) Realtime publication 비어 있어 파트너 페이지 자동 새로고침이 동작하지 않습니다. (d) FK 인덱스 9개 누락으로 admin 페이지가 트래픽 누적 시 급격히 느려집니다. (e) RLS 정책 약 40개가 행당 `auth.uid()` 재평가하여 대용량 쿼리 성능이 저하됩니다.
 >
-> **반드시 Step 7 (`harden_rpc_security_2026_05`), Step 8 (`harden_rls_writes_2026_05`), Step 8C (`*_rate_limit_2026_05` 3종 + `is_admin_enumeration_hardening_2026_05`), Step 8D (`audit_cleanup_2026_05`, `realtime_partner_publication_2026_05`, `fk_indexes_2026_05`, `rls_initplan_optimization_2026_05`, `rls_role_check_optimization_2026_05`) 를 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6, §9.8, §9.9 참고.
+> **반드시 Step 7 (`harden_rpc_security_2026_05`), Step 8 (`harden_rls_writes_2026_05`), Step 8C (`*_rate_limit_2026_05` 3종 + `is_admin_enumeration_hardening_2026_05`), Step 8D (`audit_cleanup_2026_05`, `realtime_partner_publication_2026_05`, `fk_indexes_2026_05`, `rls_initplan_optimization_2026_05`, `rls_role_check_optimization_2026_05`, `rls_permissive_policy_consolidation_2026_05`, `rls_admin_all_policy_split_2026_05`) 를 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6, §9.8, §9.9 참고.
 >
 > 🔐 **추가 권장 (Supabase Auth 대시보드)**: **Authentication → Policies → "Leaked Password Protection"** 토글을 **On** 으로 변경하세요. 이 옵션은 HaveIBeenPwned 데이터셋과 신규/변경 비밀번호를 대조해 유출된 자격을 차단합니다 (Supabase advisor `auth_leaked_password_protection` 경고 해결). SQL 로는 켤 수 없는 대시보드-온리 설정입니다.
 
@@ -202,10 +202,10 @@ SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
 SELECT COUNT(*) FROM pg_tables
 WHERE schemaname = 'public' AND rowsecurity = true;
 
--- 정책 52개 (Step 7+8+8C+8D 적용 후 explicit DENY 3건 추가된 최종 상태)
+-- 정책 49개 (Step 7+8+8C+8D 적용 후 RLS permissive 중복 병합/분리까지 완료된 최종 상태)
 SELECT COUNT(*) FROM pg_policies WHERE schemaname = 'public';
 
--- RPC 함수 25개 (Step 8C rate-limit 4종 + is_admin + cleanup + 기타 + 4-arg overload)
+-- RPC 함수 23개 (rate-limit 4종 + 4-arg wallet RPC only + service_role 전용 RPC ACL)
 SELECT COUNT(*) FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public' AND p.prokind = 'f';
@@ -255,7 +255,7 @@ WHERE schemaname='public' AND tablename='notifications' AND cmd='INSERT';
 -- with_check:
 --   '((auth.uid() = user_id) OR (EXISTS ( SELECT 1 FROM admins WHERE (admins.id = auth.uid()))))'
 
--- ✅ Step 8C 검증: Rate-Limit 테이블 3종 존재 + RLS-on + 정책 0건 (service_role 전용 잠금)
+-- ✅ Step 8C/8D 검증: Rate-Limit 테이블 3종 존재 + RLS-on + explicit DENY 정책 (service_role 전용 잠금)
 SELECT c.relname,
        c.relrowsecurity AS rls_enabled,
        (SELECT COUNT(*) FROM pg_policies p
@@ -267,7 +267,7 @@ WHERE n.nspname = 'public'
                     'auth_signup_attempts',
                     'auth_duplicate_check_attempts')
 ORDER BY c.relname;
--- 모든 행이 rls_enabled=true, policy_count=0 이어야 합니다.
+-- 모든 행이 rls_enabled=true, policy_count=1 이어야 합니다.
 
 -- ✅ Step 8C 검증: Rate-Limit RPC 4종 + EXECUTE = service_role 전용
 SELECT p.proname,
@@ -311,15 +311,16 @@ ORDER BY p.proname;
 -- 각 함수당 1행만 표시되어야 하며 args 끝에 'p_admin_id uuid' 가 포함되어야 합니다.
 -- 3-arg 오버로드가 보이면 Step 8D `audit_cleanup_2026_05` 누락.
 
--- ✅ Step 8D 검증: 3종 service-role-전용 테이블에 explicit DENY 정책 적용
+-- ✅ Step 8D 검증: 4종 service-role-전용 테이블에 explicit DENY 정책 적용
 SELECT tablename, policyname, qual, with_check
 FROM pg_policies
 WHERE schemaname='public'
-  AND policyname IN ('auth_signup_attempts_no_client_access',
+  AND policyname IN ('auth_login_attempts_no_client_access',
+                     'auth_signup_attempts_no_client_access',
                      'auth_duplicate_check_attempts_no_client_access',
                      'api_idempotency_keys_no_client_access')
 ORDER BY tablename;
--- 3행이 모두 qual='false', with_check='false' 여야 합니다.
+-- 4행이 모두 qual='false', with_check='false' 여야 합니다.
 
 -- ✅ Step 8D 검증: Realtime publication 에 partner 테이블 2종 등록
 SELECT schemaname, tablename FROM pg_publication_tables
@@ -347,16 +348,26 @@ WHERE schemaname='public'
     OR with_check ILIKE '%( SELECT auth.uid() AS uid)%');
 -- 기대: 40 이상. 작으면 `rls_initplan_optimization_2026_05` 누락.
 
+-- ✅ Step 8D 검증: RLS permissive 중복 정책 제거
+SELECT tablename, cmd, roles, COUNT(*) AS n, array_agg(policyname ORDER BY policyname) AS policies
+FROM pg_policies
+WHERE schemaname='public'
+GROUP BY tablename, cmd, roles
+HAVING COUNT(*) > 1
+ORDER BY tablename, cmd, roles::text;
+-- 기대: 0행. 결과가 있으면 `rls_permissive_policy_consolidation_2026_05`
+-- 또는 `rls_admin_all_policy_split_2026_05` 누락.
+
 -- ✅ Step 8D 검증: Dead Edge Function 4종이 410/401 을 반환하는지 (브라우저/CLI)
 -- curl -X POST https://<프로젝트ref>.supabase.co/functions/v1/user-signup -d '{}'
 -- 기대: HTTP 401 (verify_jwt=true 라 anon 거부) — JWT 가 있어도 본문은 410
 -- 같은 검증을 user-record-login / backoffice-record-login / validate-referral-code 에 반복.
 
--- ✅ Step 8D 검증: Edge Function 4개만 ACTIVE 상태 (admin 전용)
--- Supabase Dashboard → Edge Functions 패널에서 다음만 active 여야 합니다:
+-- ✅ Step 8D 검증: 로컬 source/deploy 대상은 admin 전용 4개만 유지
+-- Supabase Dashboard → Edge Functions 패널에서 다음 4개 admin 함수가 active 여야 합니다:
 --   admin-create-backoffice-account, admin-delete-backoffice-account,
 --   admin-update-user-password, admin-force-logout
--- user-facing 4개(user-signup 등)는 410 stub 상태로 표시될 수 있으나 호출되지 않습니다.
+-- user-facing 4개(user-signup 등)는 prod 에서 verify_jwt=true + 410 stub 으로 active/reserved 상태일 수 있으나 호출되지 않습니다.
 ```
 
 > ⚠️ 카운트가 다르다면 마이그레이션이 중간에 실패한 것입니다. SQL Editor 출력에서 에러 메시지를 확인하여 누락된 단계를 재실행하세요.
@@ -892,14 +903,14 @@ HAVING ABS(
 [ Supabase ]
 □ 새 프로젝트 생성 → URL / anon / service_role 키 복사
 □ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B + Step 8C + Step 8D 모두 포함)
-□ 검증 쿼리: 테이블 24, RLS 24, 정책 52, RPC 25(rate-limit 4종 + 4-arg overload 포함) 일치 확인
+□ 검증 쿼리: 테이블 24, RLS 24, 정책 49, RPC 23(rate-limit 4종 + 4-arg overload 포함) 일치 확인
 □ Step 7 검증: 민감 RPC EXECUTE 가 service_role 한정인지 (Step 4.3 쿼리)
 □ Step 8 검증: 위험 RLS 정책 7건이 모두 제거되었는지 (Step 4.3 쿼리)
 □ Step 8B 검증: Edge Function 4종의 최신 코드(super_admin 가드 포함)가 배포되었는지
-□ Step 8C 검증: auth_*_attempts 테이블 3종 RLS-on/정책 0건 + rate-limit RPC 4종 service_role 전용 (§9.8 쿼리)
+□ Step 8C/8D 검증: auth_*_attempts 테이블 3종 RLS-on + explicit DENY 정책 + rate-limit RPC 4종 service_role 전용 (§9.8/§9.9 쿼리)
 □ Step 8C 라이브 테스트: §4.3 의 DO 블록으로 게이트 lock/reset 동작 확인
 □ Step 8D 검증: 3-arg process_deposit/process_withdrawal 제거, FK 인덱스 9개, realtime publication 2종 (§4.3 쿼리)
-□ Step 8D 검증: RLS InitPlan 패턴 정책 40개 이상 + 3개 service-role 테이블 explicit DENY
+□ Step 8D 검증: RLS InitPlan 패턴 정책 40개 이상 + 4개 service-role 테이블 explicit DENY + permissive 중복 0건
 □ Step 8D 검증: Edge Function 4종(user-*, validate-referral-code)이 410/401 반환
 □ Authentication → "Leaked Password Protection" 토글 ON (HIBP 검사, Supabase advisor 경고 해결)
 
@@ -959,5 +970,5 @@ HAVING ABS(
 
 ---
 
-문서 최종 업데이트: 2026-05-16 (Step 8D 전역 감사·최적화 패치 5종 추가 — 4-arg RPC 강제 + 410 stub + explicit DENY + realtime publication + FK 인덱스 9 + RLS InitPlan 최적화; 카운트 24/24/52/25 유지)
+문서 최종 업데이트: 2026-05-16 (Step 8D 전역 감사·최적화 패치 7종 추가 — 4-arg RPC 강제 + 410 stub + explicit DENY + realtime publication + FK 인덱스 9 + RLS InitPlan/permissive 최적화; prod 카운트 24/24/49/23)
 관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7, §9.8, §9.9), `partner_migration.md`
