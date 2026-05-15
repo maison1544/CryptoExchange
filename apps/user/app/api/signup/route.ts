@@ -1,19 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { getClientIp } from "@/lib/server/clientIp";
-import { rateLimit } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const rl = rateLimit(`signup:${ip}`, 5, 60_000);
-  if (!rl.success) {
-    return NextResponse.json(
-      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
-      { status: 429 },
-    );
-  }
-
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -21,7 +10,42 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Server config error" }, { status: 500 });
   }
 
-  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // DB-backed sliding-window rate-limit. The previous in-memory Map only
+  // survived inside a single Vercel worker, so an attacker fanning out
+  // across regions could trivially get N×limit attempts per window. The
+  // RPC uses server-side `now()` so client clock skew cannot bypass it
+  // and is locked down to service_role-only via REVOKE/GRANT.
+  const rateLimitIp =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip")?.trim() ||
+    "";
+  if (rateLimitIp) {
+    const { data: gate, error: gateErr } = await supabaseAdmin.rpc(
+      "check_and_record_signup_attempt",
+      { p_ip: rateLimitIp },
+    );
+    if (!gateErr) {
+      const payload = (gate ?? {}) as {
+        allowed?: boolean;
+        retry_after_seconds?: number;
+      };
+      if (payload.allowed === false) {
+        const retryAfter = Math.max(1, payload.retry_after_seconds ?? 60);
+        return NextResponse.json(
+          { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+          {
+            status: 429,
+            headers: { "Retry-After": String(retryAfter) },
+          },
+        );
+      }
+    }
+    // gateErr fails open — never block legitimate signups on a DB blip.
+  }
 
   try {
     const body = await req.json().catch(() => null);

@@ -19,6 +19,7 @@
 9.5. [Step 6.5 — 🔒 보안 하드닝 (반드시 실행)](#95-step-65--보안-하드닝-반드시-실행)
 9.6. [Step 6.6 — 🔒 추가 보안 하드닝 2026-05 (RLS 정책 정리 + 누락 RPC 보강)](#96-step-66--추가-보안-하드닝-2026-05-rls-정책-정리--누락-rpc-보강)
 9.7. [Step 6.7 — 🔒 백오피스 권한 상승 차단 (Edge Function 강화)](#97-step-67--백오피스-권한-상승-차단-edge-function-강화)
+9.8. [Step 6.8 — 🔒 인증 Rate-Limit 하드닝 (DB 기반 슬라이딩 윈도우)](#98-step-68--인증-rate-limit-하드닝-db-기반-슬라이딩-윈도우)
 10. [Step 7 — Edge Functions 배포](#10-step-7--edge-functions-배포)
 11. [Step 8 — Auth 사용자 생성](#11-step-8--auth-사용자-생성)
 12. [Step 9 — 검증 쿼리](#12-step-9--검증-쿼리)
@@ -1791,6 +1792,100 @@ await fetch(`${SUPABASE_URL}/functions/v1/admin-delete-backoffice-account`, {
 ```
 
 `super_admin` 으로 로그인하면 동일한 호출이 모두 200 으로 정상 처리되어야 합니다.
+
+---
+
+## 9.8. Step 6.8 — 🔒 인증 Rate-Limit 하드닝 (DB 기반 슬라이딩 윈도우)
+
+> **이 단계는 로그인 / 회원가입 / 중복확인 엔드포인트의 브루트포스·열거 공격 내성을 끌어올립니다.** 기존 in-memory `Map` 기반 limiter 는 Vercel 서버리스에서 무력화됩니다 (인스턴스마다 메모리 분리 + cold-start 초기화 + 클라이언트 시각 신뢰 X). 모든 카운터를 Postgres 테이블 + `SECURITY DEFINER` RPC 로 옮겨 **단일 진실 원천** + **서버 `now()`** 기반 윈도우 검사로 통일합니다.
+
+### 9.8.1 위협 모델 / 적용 결과
+
+| 엔드포인트 | 9.8 이전 약점 | 9.8 적용 후 |
+|---|---|---|
+| 로그인 (`supabase.auth.signInWithPassword`) | 클라가 직접 호출 → 외부 limiter 부재 | `AuthContext.login()` 이 **반드시** `/api/auth/check-login-rate-limit` 게이트를 먼저 통과해야 함. IP 20/5분, email 8/15분 |
+| `POST /api/signup` | per-worker Map (실효 한도 = N × 5/min) | DB-backed IP 10/10분, 모든 워커 공유 |
+| `POST /api/signup/check-duplicate` | per-worker Map (이메일/전화 열거 가능) | DB-backed IP 60/10분, 모든 워커 공유 |
+| `POST /api/auth/login` (사문화된 라우트) | 잔존 시 신규 게이트 우회 가능 | **라우트 삭제** (`apps/user/app/api/auth/login/` 디렉토리 통째 제거) |
+
+### 9.8.2 신규 마이그레이션 3종 (prod 적용 완료)
+
+| 마이그레이션 이름 | 생성 객체 | 호출자 |
+|---|---|---|
+| `login_rate_limit_2026_05` | `auth_login_attempts` 테이블, `check_and_record_login_attempt(email,ip,...)` RPC, `mark_login_success(email,ip)` RPC, `cleanup_old_login_attempts()` RPC | `/api/auth/check-login-rate-limit`, `/api/auth/mark-login-success` (둘 다 service_role) |
+| `signup_rate_limit_2026_05` | `auth_signup_attempts` 테이블, `check_and_record_signup_attempt(ip,...)` RPC | `/api/signup` (service_role) |
+| `duplicate_check_rate_limit_2026_05` | `auth_duplicate_check_attempts` 테이블, `check_and_record_duplicate_check(ip,...)` RPC | `/api/signup/check-duplicate` (service_role) |
+
+세 테이블 모두 `ENABLE ROW LEVEL SECURITY` + 정책 0개 + `REVOKE ALL FROM anon, authenticated` 로 잠겨 있어 service_role 외에는 어떤 방식으로도 접근할 수 없습니다. (Supabase advisor `rls_enabled_no_policy` INFO 로그가 뜨지만, 이는 **의도된 잠금** 입니다.)
+
+모든 RPC 는 `SECURITY DEFINER` + `EXECUTE` 권한이 `service_role` 에게만 부여되어 있어 PostgREST `/rest/v1/rpc/...` 경로로 직접 호출이 불가능합니다.
+
+### 9.8.3 SQL 적용 방법 (신규 프로젝트)
+
+신규 Supabase 프로젝트에서는 위 3개 마이그레이션을 SQL Editor 에 그대로 붙여넣고 실행하면 됩니다. 최신 SQL 본문은 두 위치 중 하나에서 가져올 수 있습니다:
+
+- **소스 트리** (권장): `apps/user/supabase/migrations/` 의 해당 파일들
+- **Supabase 콘솔** → Database → Migrations → `login_rate_limit_2026_05`, `signup_rate_limit_2026_05`, `duplicate_check_rate_limit_2026_05` 의 `View SQL`
+
+### 9.8.4 `is_admin` 열거 차단 (advisor 0029 대응)
+
+`public.is_admin(uuid)` 는 25개 이상의 RLS 정책이 호출하므로 `authenticated` 에서 `EXECUTE` 권한을 회수할 수 없습니다. 대신 함수 본문을 다음과 같이 좁혀, 호출자 본인 UID 가 아닌 임의 UID 로 admin 여부를 조회하려는 시도를 차단합니다 (마이그레이션 `is_admin_enumeration_hardening_2026_05`).
+
+```sql
+CREATE OR REPLACE FUNCTION public.is_admin(p_uid uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.admins
+     WHERE id = p_uid AND p_uid = (SELECT auth.uid())
+  );
+$$;
+REVOKE ALL ON FUNCTION public.is_admin(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_admin(uuid) TO authenticated, service_role;
+```
+
+- RLS 정책은 모두 `is_admin(auth.uid())` 로 호출하므로 **무영향**.
+- 외부 공격자가 `POST /rest/v1/rpc/is_admin?p_uid=<arbitrary>` 를 시도하면 `auth.uid() ≠ p_uid` 이므로 항상 `false`.
+- Supabase advisor 0029 (`authenticated_security_definer_function_executable`) 정적 lint 경고는 잔존하지만, **본문 가드** 가 enumeration 을 실질 차단합니다.
+
+### 9.8.5 검증 쿼리 (prod 에서 직접 실행 가능)
+
+```sql
+-- 1) 로그인 게이트가 8회 시도 내에 잠기는지 확인
+DO $$ DECLARE r jsonb; e text := 'rl_test_'||extract(epoch from now())::text||'@x.io';
+BEGIN
+  FOR i IN 1..10 LOOP
+    SELECT public.check_and_record_login_attempt(e, '203.0.113.99') INTO r;
+    EXIT WHEN (r->>'allowed')::boolean = false;
+  END LOOP;
+  IF (r->>'allowed')::boolean THEN RAISE EXCEPTION 'gate not locked'; END IF;
+  PERFORM public.mark_login_success(e, '203.0.113.99');
+  SELECT public.check_and_record_login_attempt(e, '203.0.113.99') INTO r;
+  IF (r->>'allowed')::boolean = false THEN RAISE EXCEPTION 'reset failed'; END IF;
+  DELETE FROM public.auth_login_attempts WHERE email = e;
+END $$;
+
+-- 2) is_admin 이 임의 UID 에 대해 false 를 반환하는지 확인 (auth.uid() = NULL)
+SELECT public.is_admin('00000000-0000-0000-0000-000000000001'::uuid); -- expect: false
+```
+
+### 9.8.6 코드 측 변경 사항 (참조용)
+
+| 파일 | 변경 |
+|---|---|
+| `apps/user/contexts/AuthContext.tsx` | `login()` 이 `signInWithPassword` 전에 `/api/auth/check-login-rate-limit` 호출, 성공 시 `/api/auth/mark-login-success` fire-and-forget |
+| `apps/user/app/api/auth/check-login-rate-limit/route.ts` | 신규 — `check_and_record_login_attempt` RPC 프록시, 429 시 한국어 메시지 + `Retry-After` |
+| `apps/user/app/api/auth/mark-login-success/route.ts` | 신규 — `mark_login_success` RPC 프록시, fire-and-forget |
+| `apps/user/app/api/signup/route.ts` | in-memory `rateLimit` 제거, `check_and_record_signup_attempt` RPC 게이트 추가 |
+| `apps/user/app/api/signup/check-duplicate/route.ts` | in-memory `rateLimit` 제거, `check_and_record_duplicate_check` RPC 게이트 추가 |
+| `apps/user/app/api/auth/login/` | **디렉토리 삭제** (사문화된 SSR 로그인 라우트 제거) |
+| `apps/user/lib/rateLimit.ts` | 헤더 주석에 "비인증 엔드포인트에 사용 금지" 경고 추가 |
+
+### 9.8.7 잔존 위험 / 트레이드오프
+
+- **이메일 버킷 DoS** — 공격자가 임의 IP 풀에서 `victim@example.com` 으로 8회 실패 시도를 보내면 피해자가 15분간 잠깁니다. `mark_login_success` 가 성공 시 카운터를 비우지만, 피해자가 게이트를 통과해야 호출됩니다. 캡차 통합은 본 가이드의 범위 밖이며 후속 작업으로 처리합니다.
+- **fail-open** — 게이트 RPC 가 DB 오류 시 통과시킵니다. Supabase Auth 자체 throttle (서버측, 별도 카운터) 이 마지막 방어선 역할을 수행합니다.
 
 ---
 

@@ -233,8 +233,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // with itself.
       loginInProgressRef.current = true;
       try {
+        const normalisedEmail = email.trim().toLowerCase();
+
+        // Server-side rate-limit gate. Runs *before* signInWithPassword so
+        // a brute-force attempt never reaches Supabase Auth, and the
+        // window cutoff uses server-side `now()` instead of trusting the
+        // client clock. Failures here fall open (the route already
+        // handles its own fail-open behaviour), but anything returning a
+        // non-2xx with a Korean error string is surfaced to the user.
+        try {
+          const gateRes = await fetch("/api/auth/check-login-rate-limit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: normalisedEmail }),
+            credentials: "same-origin",
+          });
+          if (gateRes.status === 429) {
+            const body = (await gateRes.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            return {
+              error:
+                body?.error ??
+                "너무 많은 로그인 시도입니다. 잠시 후 다시 시도해주세요.",
+            };
+          }
+        } catch {
+          // network error reaching our own API — fall through to Supabase
+          // Auth which still has its own throttle as a last line of defence.
+        }
+
         const { data, error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
+          email: normalisedEmail,
           password,
         });
 
@@ -291,6 +321,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           void recordBackofficeLogin(accessToken).catch(() => {});
         }
+
+        // Reset the sliding-window counter for this IP+email pair so a
+        // user who finally types their password correctly is not still
+        // throttled. Fire-and-forget; failures must not block the UI.
+        void fetch("/api/auth/mark-login-success", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: normalisedEmail }),
+          credentials: "same-origin",
+          keepalive: true,
+        }).catch(() => {});
 
         const narrowed = narrowRole(detected);
         setUser(data.user);

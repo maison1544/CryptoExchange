@@ -174,13 +174,18 @@ pnpm install
 | **Step 7 (필수)** | **🔒 1차 하드닝: RPC EXECUTE 회수 + `search_path` 고정 + `login_logs` RLS 강화** (`supabase_migration.md` §9.5) | 2분 |
 | **Step 8 (필수)** | **🔒 2차 하드닝: RLS INSERT/UPDATE 컬럼-무제한 정책 7건 제거 + `notifications` INSERT 정책 강화** (`supabase_migration.md` §9.6) | 2분 |
 | **Step 8B (필수)** | **🔒 3차 하드닝: Edge Function 4종에 `super_admin` 가드 적용 후 재배포 (권한 상승 차단)** (`supabase_migration.md` §9.7) | 1분 |
+| **Step 8C (필수)** | **🔒 4차 하드닝: 인증 Rate-Limit DB 게이트 4종 (login / signup / duplicate-check / is_admin 열거 차단)** (`supabase_migration.md` §9.8) | 2분 |
 | Step 9 | 검증 쿼리 (테이블·정책·함수 카운트 + 보안 정책 잔존 체크) | 1분 |
 
 > 🚨 **Step 7 누락 시 치명적 취약점**: Step 5에서 생성된 17개 SECURITY DEFINER RPC는 기본값으로 `anon`/`authenticated` 가 EXECUTE 가능합니다. 이 상태에서는 로그인만 한 임의 사용자가 `/rest/v1/rpc/adjust_user_balance` 등을 직접 호출하여 잔액을 임의로 가산하거나 본인의 입출금을 자체 승인할 수 있습니다.
 >
 > 🚨 **Step 8 누락 시 치명적 취약점**: PostgreSQL RLS 의 `WITH CHECK` 절은 행 단위 조건만 보고 컬럼 변경 여부는 보지 않습니다. Step 4 가 만든 `users_insert_own_positions`, `profiles_update_own`, `deposits_insert_own`, `withdrawals_insert_own` 등은 표면적으로 "본인 행만 쓸 수 있음" 처럼 보이지만 실제로는 본인 행의 모든 컬럼을 임의 값으로 INSERT/UPDATE 할 수 있게 합니다. 사용자가 가짜 `futures_positions` 행을 생성한 뒤 `/api/futures/close` 로 시장가 정산을 유도해 자유 출금을 발생시키거나, `user_profiles.wallet_balance` 를 직접 변조하는 익스플로잇이 가능합니다.
 >
-> **반드시 Step 7 (`harden_rpc_security_2026_05`) 과 Step 8 (`harden_rls_writes_2026_05`) 을 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6 참고.
+> 🚨 **Step 8C 누락 시 위협**: in-memory `Map` 기반 rate-limit 은 Vercel 서버리스에서 무력화됩니다 (인스턴스마다 메모리 분리 + cold-start 초기화). 결과적으로 로그인 브루트포스, 회원가입 봇 스팸, 이메일·전화번호 열거(`/api/signup/check-duplicate`) 가 사실상 unlimited 입니다. Step 8C 의 4개 마이그레이션 (`login_rate_limit_2026_05`, `signup_rate_limit_2026_05`, `duplicate_check_rate_limit_2026_05`, `is_admin_enumeration_hardening_2026_05`) 을 적용하면 모든 카운터가 DB 단일 진실 원천 + 서버 `now()` 윈도우로 통일됩니다.
+>
+> **반드시 Step 7 (`harden_rpc_security_2026_05`), Step 8 (`harden_rls_writes_2026_05`), Step 8C (`*_rate_limit_2026_05` 3종 + `is_admin_enumeration_hardening_2026_05`) 을 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6, §9.8 참고.
+>
+> 🔐 **추가 권장 (Supabase Auth 대시보드)**: **Authentication → Policies → "Leaked Password Protection"** 토글을 **On** 으로 변경하세요. 이 옵션은 HaveIBeenPwned 데이터셋과 신규/변경 비밀번호를 대조해 유출된 자격을 차단합니다 (Supabase advisor `auth_leaked_password_protection` 경고 해결). SQL 로는 켤 수 없는 대시보드-온리 설정입니다.
 
 ### 4.3 검증 쿼리 (필수)
 
@@ -246,6 +251,54 @@ SELECT policyname, with_check FROM pg_policies
 WHERE schemaname='public' AND tablename='notifications' AND cmd='INSERT';
 -- with_check:
 --   '((auth.uid() = user_id) OR (EXISTS ( SELECT 1 FROM admins WHERE (admins.id = auth.uid()))))'
+
+-- ✅ Step 8C 검증: Rate-Limit 테이블 3종 존재 + RLS-on + 정책 0건 (service_role 전용 잠금)
+SELECT c.relname,
+       c.relrowsecurity AS rls_enabled,
+       (SELECT COUNT(*) FROM pg_policies p
+         WHERE p.schemaname = 'public' AND p.tablename = c.relname) AS policy_count
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname IN ('auth_login_attempts',
+                    'auth_signup_attempts',
+                    'auth_duplicate_check_attempts')
+ORDER BY c.relname;
+-- 모든 행이 rls_enabled=true, policy_count=0 이어야 합니다.
+
+-- ✅ Step 8C 검증: Rate-Limit RPC 4종 + EXECUTE = service_role 전용
+SELECT p.proname,
+       p.prosecdef AS security_definer,
+       p.proacl::text AS acl
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public'
+  AND p.proname IN ('check_and_record_login_attempt',
+                    'mark_login_success',
+                    'check_and_record_signup_attempt',
+                    'check_and_record_duplicate_check')
+ORDER BY p.proname;
+-- 모든 행이 security_definer=true 이고 acl 에 service_role 만 포함되어야 합니다
+-- (postgres 와 service_role 외에 anon/authenticated 가 보이면 Step 8C 누락).
+
+-- ✅ Step 8C 검증: is_admin 함수가 임의 UID enumeration 을 차단
+SELECT public.is_admin('00000000-0000-0000-0000-000000000001'::uuid) AS arbitrary_uid;
+-- 결과: false (SQL Editor 에서는 auth.uid() = NULL 이므로 본문 가드에서 차단됨)
+
+-- ✅ Step 8C 라이브 게이트 동작 검증 (8회 이내 lock + mark_login_success 로 reset)
+DO $$ DECLARE r jsonb; e text := 'rl_test_'||extract(epoch from now())::text||'@x.io';
+BEGIN
+  FOR i IN 1..10 LOOP
+    SELECT public.check_and_record_login_attempt(e, '203.0.113.99') INTO r;
+    EXIT WHEN (r->>'allowed')::boolean = false;
+  END LOOP;
+  IF (r->>'allowed')::boolean THEN RAISE EXCEPTION 'gate not locked'; END IF;
+  PERFORM public.mark_login_success(e, '203.0.113.99');
+  SELECT public.check_and_record_login_attempt(e, '203.0.113.99') INTO r;
+  IF (r->>'allowed')::boolean = false THEN RAISE EXCEPTION 'reset failed'; END IF;
+  DELETE FROM public.auth_login_attempts WHERE email = e;
+  RAISE NOTICE 'PASS — rate-limit gate locks then resets';
+END $$;
 ```
 
 > ⚠️ 카운트가 다르다면 마이그레이션이 중간에 실패한 것입니다. SQL Editor 출력에서 에러 메시지를 확인하여 누락된 단계를 재실행하세요.
@@ -776,12 +829,14 @@ HAVING ABS(
 
 [ Supabase ]
 □ 새 프로젝트 생성 → URL / anon / service_role 키 복사
-□ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B 모두 포함)
-□ 검증 쿼리: 테이블 19, RLS 19, 정책 49, RPC 17 일치 확인
+□ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B + Step 8C 모두 포함)
+□ 검증 쿼리: 테이블 24(rate-limit 3종 포함), RLS 24, 정책 52, RPC 25(rate-limit 4종 포함) 일치 확인
 □ Step 7 검증: 민감 RPC EXECUTE 가 service_role 한정인지 (Step 4.3 쿼리)
 □ Step 8 검증: 위험 RLS 정책 7건이 모두 제거되었는지 (Step 4.3 쿼리)
 □ Step 8B 검증: Edge Function 4종의 최신 코드(super_admin 가드 포함)가 배포되었는지
-□ Authentication → "Leaked Password Protection" 토글 ON (HIBP 검사)
+□ Step 8C 검증: auth_*_attempts 테이블 3종 RLS-on/정책 0건 + rate-limit RPC 4종 service_role 전용 (§9.8 쿼리)
+□ Step 8C 라이브 테스트: §4.3 의 DO 블록으로 게이트 lock/reset 동작 확인
+□ Authentication → "Leaked Password Protection" 토글 ON (HIBP 검사, Supabase advisor 경고 해결)
 
 [ 로컬 ]
 □ git clone <repo>
@@ -816,6 +871,7 @@ HAVING ABS(
 □ 모바일 거래 페이지 진입 즉시 차트 표시 (탭 클릭 불필요)
 □ 🔒 §10.5 의 RLS + 권한상승 모의 침투 8종 모두 차단되는지 (Step 7+8+8B 적용 검증)
 □ 🔒 로그인/회원가입 폼이 method="post" 로 제출되는지 (URL에 password 노출 없음)
+□ 🔒 로그인 폼에 잘못된 비밀번호 9회 반복 시 "너무 많은 로그인 시도입니다" 가 표시되는지 (Step 8C 게이트)
 
 [ 마무리 ]
 □ git tag v1.0.0-clone && git push --tags
@@ -835,5 +891,5 @@ HAVING ABS(
 
 ---
 
-문서 최종 업데이트: 2026-05-15 (Step 8B Edge Function 권한상승 가드 추가; 카운트 19/19/49/17)
-관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7), `partner_migration.md`
+문서 최종 업데이트: 2026-05-16 (Step 8C 인증 Rate-Limit DB 게이트 + is_admin 열거 차단 추가; 카운트 24/24/52/25)
+관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7, §9.8), `partner_migration.md`

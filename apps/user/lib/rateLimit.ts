@@ -1,6 +1,19 @@
 /**
- * Simple in-memory rate limiter for serverless API routes.
- * For production at scale, replace with Redis-backed solution (e.g. @upstash/ratelimit).
+ * Best-effort in-memory rate limiter for *authenticated* serverless API
+ * routes (abuse mitigation on top of an already-required session cookie).
+ *
+ * DO NOT USE FOR UNAUTHENTICATED ENDPOINTS such as login, signup,
+ * password-reset or any other surface an attacker can hit without first
+ * proving identity. The Map lives inside a single Vercel worker, so:
+ *   - cold-starts wipe it,
+ *   - traffic round-robined across N instances effectively multiplies
+ *     the limit by N,
+ *   - and there is no cross-region coordination.
+ *
+ * Login / signup brute-force defence is implemented via the
+ * `check_and_record_login_attempt` and `check_and_record_signup_attempt`
+ * Postgres RPCs, which use a single shared DB table and server-side
+ * `now()` so every worker sees the same window.
  */
 
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();

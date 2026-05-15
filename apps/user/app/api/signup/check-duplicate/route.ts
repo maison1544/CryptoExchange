@@ -1,18 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import { rateLimit } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const rl = rateLimit(`check-dup:${ip}`, 10, 60_000);
-  if (!rl.success) {
-    return NextResponse.json(
-      { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
-      { status: 429 },
-    );
-  }
-
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -20,7 +9,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Server config error" }, { status: 500 });
   }
 
-  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // Enumeration-resistant DB-backed rate-limit. Each duplicate check is
+  // effectively a probe asking "is this email/phone registered?" — the
+  // in-memory Map limiter we used before reset on every cold-start and
+  // was per-worker, so an attacker fanning out trivially extracted the
+  // entire user list. The shared DB counter caps probes across all
+  // workers using server `now()`.
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip")?.trim() ||
+    "";
+  if (ip) {
+    const { data: gate, error: gateErr } = await supabaseAdmin.rpc(
+      "check_and_record_duplicate_check",
+      { p_ip: ip },
+    );
+    if (!gateErr) {
+      const payload = (gate ?? {}) as {
+        allowed?: boolean;
+        retry_after_seconds?: number;
+      };
+      if (payload.allowed === false) {
+        const retryAfter = Math.max(1, payload.retry_after_seconds ?? 60);
+        return NextResponse.json(
+          { error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요." },
+          {
+            status: 429,
+            headers: { "Retry-After": String(retryAfter) },
+          },
+        );
+      }
+    }
+    // gateErr → fail open so a DB blip cannot lock out signup UX.
+  }
 
   const body = await req.json().catch(() => null);
   if (!body) {
