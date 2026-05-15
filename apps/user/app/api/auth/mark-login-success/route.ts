@@ -39,10 +39,12 @@ export async function POST(req: NextRequest) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  await supabaseAdmin
-    .rpc("mark_login_success", { p_email: email, p_ip: ip })
-    .then(() => undefined)
-    .catch(() => undefined);
+  try {
+    await supabaseAdmin.rpc("mark_login_success", { p_email: email, p_ip: ip });
+  } catch {
+    // Best-effort cleanup; the user is already authenticated so a failure
+    // here must not block the login flow.
+  }
 
   return NextResponse.json({ ok: true });
 }

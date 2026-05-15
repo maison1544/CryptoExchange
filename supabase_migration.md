@@ -20,6 +20,7 @@
 9.6. [Step 6.6 — 🔒 추가 보안 하드닝 2026-05 (RLS 정책 정리 + 누락 RPC 보강)](#96-step-66--추가-보안-하드닝-2026-05-rls-정책-정리--누락-rpc-보강)
 9.7. [Step 6.7 — 🔒 백오피스 권한 상승 차단 (Edge Function 강화)](#97-step-67--백오피스-권한-상승-차단-edge-function-강화)
 9.8. [Step 6.8 — 🔒 인증 Rate-Limit 하드닝 (DB 기반 슬라이딩 윈도우)](#98-step-68--인증-rate-limit-하드닝-db-기반-슬라이딩-윈도우)
+9.9. [Step 6.9 — 🔒 전역 감사·최적화 패치 2026-05 (5차 하드닝)](#99-step-69--전역-감사최적화-패치-2026-05-5차-하드닝)
 10. [Step 7 — Edge Functions 배포](#10-step-7--edge-functions-배포)
 11. [Step 8 — Auth 사용자 생성](#11-step-8--auth-사용자-생성)
 12. [Step 9 — 검증 쿼리](#12-step-9--검증-쿼리)
@@ -33,12 +34,12 @@
 
 | 분류 | 개수 | 비고 |
 |------|------|------|
-| **테이블** | 17개 | public 스키마 |
-| **RLS 정책** | 22개 | 모든 테이블에 활성화 |
-| **인덱스** | 17개 | 성능 최적화 |
+| **테이블** | 24개 | public 스키마 (rate-limit 3종 + audit + idempotency 포함) |
+| **RLS 정책** | 52개 | 모든 테이블에 활성화, 9.9 적용 후 InitPlan 최적화 |
+| **인덱스** | 28개 | 9.9 의 FK covering index 9개 포함 |
 | **CHECK 제약조건** | 5개 | 잔고 무결성 |
-| **RPC 함수** | 13개 | SECURITY DEFINER |
-| **Edge Functions** | 8개 | Deno runtime |
+| **RPC 함수** | 25개 | 모두 SECURITY DEFINER + search_path 고정 + service_role 전용 EXECUTE |
+| **Edge Functions** | 4개 | 9.9 cleanup 후 admin 전용 (user-facing 4종은 410 stub) |
 | **공유 모듈** | 1개 | `_shared/cors.ts` |
 
 ### 마이그레이션 전략
@@ -1889,24 +1890,250 @@ SELECT public.is_admin('00000000-0000-0000-0000-000000000001'::uuid); -- expect:
 
 ---
 
+## 9.9. Step 6.9 — 🔒 전역 감사·최적화 패치 2026-05 (5차 하드닝)
+
+> **본 단계는 9.5 / 9.6 / 9.7 / 9.8 적용 후 prod 전체를 전수 감사한 결과를 반영합니다.** SQL 마이그레이션 4종 + Edge Function 4개 비활성화 + 코드 패치 1건 + RLS 정책 일괄 재작성으로 구성됩니다. 신규 클론 배포에서는 9.5 → 9.6 → 9.8 적용 직후 본 단계를 그대로 실행하면 동일한 prod 상태에 수렴합니다.
+
+### 9.9.1 발견 사항 요약 (감사 보고서)
+
+| # | 심각도 | 카테고리 | 발견 | 근본 원인 |
+|---|---|---|---|---|
+| 1 | **HIGH** | 감사 추적 누락 | `/api/admin/wallet/manage` 가 `process_deposit/process_withdrawal` 의 **3-arg** 레거시 오버로드를 호출하여 `wallet_transactions` 감사 행을 기록하지 않음 + 처리 admin UID 미기록 | API 라우트가 4-arg 오버로드 도입을 따라가지 않음 |
+| 2 | MEDIUM | Dead 공격면 | Edge Function `user-signup` 이 `verify_jwt:false` + rate-limit 0 인 채로 prod 에 존재 → 누구나 호출 가능, UI 는 사용 안 함 | UI 가 Next.js `/api/signup` 으로 이전됨 |
+| 3 | MEDIUM | Dead 공격면 | Edge Function `user-record-login`, `backoffice-record-login` 미사용 | UI 가 `/api/record-login` 으로 이전됨 |
+| 4 | MEDIUM | 정보 유출 + Dead | Edge Function `validate-referral-code` 가 verify_jwt:false 로 agent UID 를 반환 → referral code enumeration 가능, 호출자도 없음 | 회원가입 흐름이 `/api/signup` 내부 검증으로 통합됨 |
+| 5 | LOW | Dead 헬퍼 | `lib/api/auth.ts` 의 `validateReferralCode`, `callEdgeFunction`, `SUPABASE_URL/ANON_KEY` 상수 — 어디서도 import 되지 않음 | 위 #4 와 동반 |
+| 6 | LOW | Dead RPC | `process_deposit/process_withdrawal` 3-arg 오버로드 — 4-arg 도입 후 unreachable | 마이그레이션 정리 누락 |
+| 7 | LOW | Advisor noise | 3개 rate-limit/idempotency 테이블에 explicit DENY 정책이 없어 `rls_enabled_no_policy` INFO 발생 | 정책 없이 RLS-on 만으로도 거부 동작은 동일 |
+| 8 | PERF | 인덱스 부재 | 9개 외래 키에 covering index 없음 (`deposits.processed_by`, `futures_orders.filled_position_id`, `notices.author_id`, `staking_positions.product_id`, `support_messages.ticket_id`, `support_tickets.user_id`, `wallet_transactions.actor_admin_id`, `withdrawals.agent_id`, `withdrawals.processed_by`) | 점진적 스키마 진화 |
+| 9 | PERF | RLS InitPlan | 약 40개 정책의 `auth.uid()` / `auth.role()` 호출이 행마다 재평가됨 | 표준 표현식을 `(SELECT auth.uid())` 로 감싸지 않음 |
+| 10 | OPS | Realtime 무효 | partner 페이지가 `withdrawals` / `agent_commissions` 의 `postgres_changes` 를 구독하지만 publication 에 두 테이블이 없어 이벤트 없음 | publication 설정 누락 |
+
+> 9.9 가 다루지 않는 잔존 advisor 2건은 모두 의도된 상태입니다: (a) `is_admin` SECURITY DEFINER advisor 0029 — 본문 가드(`p_uid = auth.uid()`)가 enumeration 을 실질 차단하며 RLS 정책 25+ 곳이 호출하므로 EXECUTE 회수 불가, (b) `auth_leaked_password_protection` — Supabase 대시보드 토글, SQL 로 변경 불가. `multiple_permissive_policies` WARN 들은 의미별로 분리된 own/admin/agent 정책 구조라 합치면 가독성·역할 모델이 망가지므로 보류했습니다.
+
+### 9.9.2 마이그레이션 SQL 4종 (prod 적용 완료)
+
+#### (1) `audit_cleanup_2026_05`
+
+레거시 3-arg RPC 오버로드 제거 + 3개 service-role-전용 테이블에 explicit DENY 정책 추가.
+
+```sql
+-- 레거시 3-arg 오버로드 제거 (4-arg 가 wallet_transactions 감사 + admin UID 기록)
+DROP FUNCTION IF EXISTS public.process_deposit(p_deposit_id bigint, p_action text, p_reason text);
+DROP FUNCTION IF EXISTS public.process_withdrawal(p_withdrawal_id bigint, p_action text, p_reason text);
+
+-- service_role 전용 테이블에 명시적 DENY (advisor 0008 클로즈 + 의도 문서화)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+     WHERE schemaname='public' AND tablename='auth_signup_attempts'
+       AND policyname='auth_signup_attempts_no_client_access') THEN
+    EXECUTE $POLICY$
+      CREATE POLICY auth_signup_attempts_no_client_access
+        ON public.auth_signup_attempts FOR ALL TO anon, authenticated
+        USING (false) WITH CHECK (false)
+    $POLICY$;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+     WHERE schemaname='public' AND tablename='auth_duplicate_check_attempts'
+       AND policyname='auth_duplicate_check_attempts_no_client_access') THEN
+    EXECUTE $POLICY$
+      CREATE POLICY auth_duplicate_check_attempts_no_client_access
+        ON public.auth_duplicate_check_attempts FOR ALL TO anon, authenticated
+        USING (false) WITH CHECK (false)
+    $POLICY$;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+     WHERE schemaname='public' AND tablename='api_idempotency_keys'
+       AND policyname='api_idempotency_keys_no_client_access') THEN
+    EXECUTE $POLICY$
+      CREATE POLICY api_idempotency_keys_no_client_access
+        ON public.api_idempotency_keys FOR ALL TO anon, authenticated
+        USING (false) WITH CHECK (false)
+    $POLICY$;
+  END IF;
+END$$;
+```
+
+#### (2) `realtime_partner_publication_2026_05`
+
+partner 페이지 realtime 활성화. RLS 가 행 단위 필터링을 보장하므로 다른 agent 행은 전달되지 않음.
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+     WHERE pubname='supabase_realtime' AND schemaname='public' AND tablename='agent_commissions') THEN
+    EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_commissions';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+     WHERE pubname='supabase_realtime' AND schemaname='public' AND tablename='withdrawals') THEN
+    EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.withdrawals';
+  END IF;
+END$$;
+
+-- UPDATE 이벤트가 모든 컬럼을 동반 전달하도록 (PRIMARY KEY 기본 모드는 변경된 컬럼만)
+ALTER TABLE public.agent_commissions REPLICA IDENTITY FULL;
+ALTER TABLE public.withdrawals REPLICA IDENTITY FULL;
+```
+
+#### (3) `fk_indexes_2026_05`
+
+9개 외래 키에 covering index 추가. `WHERE col IS NOT NULL` 부분 인덱스로 옵셔널 FK 의 size 를 최소화.
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_deposits_processed_by
+  ON public.deposits (processed_by) WHERE processed_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_futures_orders_filled_position_id
+  ON public.futures_orders (filled_position_id) WHERE filled_position_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notices_author_id
+  ON public.notices (author_id) WHERE author_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_staking_positions_product_id
+  ON public.staking_positions (product_id);
+CREATE INDEX IF NOT EXISTS idx_support_messages_ticket_id
+  ON public.support_messages (ticket_id);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id
+  ON public.support_tickets (user_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_actor_admin_id
+  ON public.wallet_transactions (actor_admin_id) WHERE actor_admin_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_withdrawals_agent_id
+  ON public.withdrawals (agent_id) WHERE agent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_withdrawals_processed_by
+  ON public.withdrawals (processed_by) WHERE processed_by IS NOT NULL;
+```
+
+#### (4) `rls_initplan_optimization_2026_05` + `rls_role_check_optimization_2026_05`
+
+RLS 정책 약 40개를 `auth.uid()` → `(SELECT auth.uid())` 패턴으로 일괄 재작성. 본문이 길어 SQL 은 [Supabase 콘솔의 마이그레이션 패널](https://supabase.com/dashboard) 또는 새 클론 배포 시 본 가이드의 §7 ("Step 4 — RLS 활성화 & 정책") 을 갱신된 형태로 적용한 뒤 본 단계를 추가 적용하는 것으로 갈음합니다. 핵심 패턴 두 가지:
+
+```sql
+-- 패턴 A: 본인 행 정책 — auth.uid() 를 SELECT 로 감싸 InitPlan 으로 캐싱
+-- 변경 전:  (auth.uid() = user_id)
+-- 변경 후:  ((SELECT auth.uid()) = user_id)
+
+-- 패턴 B: is_admin() 호출 — 내부 auth.uid() 호이스팅
+-- 변경 전:  is_admin(auth.uid())
+-- 변경 후:  is_admin((SELECT auth.uid()))
+
+-- 패턴 C: 로그인 여부만 검사하는 정책 — TO authenticated USING (true) 로 단순화
+-- 변경 전:  USING (auth.role() = 'authenticated'::text)
+-- 변경 후:  FOR SELECT TO authenticated USING (true)
+```
+
+> 보안 동작은 완전히 동일합니다 — `(SELECT auth.uid())` 와 `auth.uid()` 는 같은 UID 를 반환하고, `TO authenticated USING (true)` 는 anon 역할에는 자동으로 USING (false) 와 동등하게 동작합니다. 적용 후 advisor `auth_rls_initplan` 경고 약 40건이 모두 사라집니다.
+
+### 9.9.3 Dead Edge Function 4종 → 410 Gone 스텁
+
+다음 함수는 UI 가 모두 Next.js API 라우트로 이전한 결과 사문화되었습니다. **삭제 대신 410 스텁 + `verify_jwt: true`** 로 교체하여 slug 를 보존하면서 외부 호출을 차단했습니다 (재배포 시 동일 slug 재사용 방지).
+
+| 함수 슬러그 | 이전 위험 | 현재 상태 |
+|---|---|---|
+| `user-signup` | verify_jwt=false + rate-limit 0 → 무한 계정 생성 가능 | v2, verify_jwt=true, 410 본문 |
+| `user-record-login` | verify_jwt=true 였으나 미사용 | v2, verify_jwt=true, 410 본문 |
+| `backoffice-record-login` | verify_jwt=true 였으나 미사용 | v2, verify_jwt=true, 410 본문 |
+| `validate-referral-code` | verify_jwt=false + agent UID 반환 → referral code enumeration | v2, verify_jwt=true, 410 본문 |
+
+410 스텁 본문 (네 함수 동일 구조, 메시지만 다름):
+
+```ts
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+Deno.serve(() =>
+  new Response(
+    JSON.stringify({ error: "Gone", message: "<엔드포인트별 대체 경로 안내>" }),
+    { status: 410, headers: { "Content-Type": "application/json" } },
+  )
+);
+```
+
+로컬 source 트리에서도 4개 디렉토리(`apps/user/supabase/functions/{user-signup,user-record-login,backoffice-record-login,validate-referral-code}/`)를 삭제하여 `supabase functions deploy` 시 다시 실수로 배포되지 않도록 잠갔습니다. 신규 클론 배포에서는 8개가 아닌 **4개 함수만** 배포하면 됩니다 (`admin-create-backoffice-account`, `admin-delete-backoffice-account`, `admin-update-user-password`, `admin-force-logout`).
+
+### 9.9.4 코드 측 변경 (현 리포지토리에 이미 반영됨)
+
+| 파일 | 변경 |
+|---|---|
+| `apps/user/app/api/admin/wallet/manage/route.ts` | `process_deposit` / `process_withdrawal` 호출 시 `p_admin_id: user.id` 추가 → 4-arg 오버로드 호출 → wallet_transactions 감사 행 자동 기록 + 처리 admin UID 기록 |
+| `apps/user/lib/api/auth.ts` | `validateReferralCode`, `callEdgeFunction`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` 상수 삭제 (어디서도 import 되지 않음) |
+| `apps/user/supabase/functions/{user-signup,user-record-login,backoffice-record-login,validate-referral-code}/` | 디렉토리 **삭제** |
+| `apps/user/app/api/auth/mark-login-success/route.ts` | `.then().catch()` 패턴이 PromiseLike 와 호환되지 않아 try/catch 로 변경 (TypeScript strict 통과) |
+
+### 9.9.5 검증 쿼리
+
+```sql
+-- ✅ 3-arg 오버로드 제거 확인 (각각 1행 = 4-arg 만 존재)
+SELECT p.proname, pg_get_function_identity_arguments(p.oid) AS args
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname='public' AND p.proname IN ('process_deposit','process_withdrawal')
+ORDER BY p.proname;
+-- 기대: 두 함수 모두 (p_deposit_id|p_withdrawal_id, p_action, p_reason, p_admin_id) 만 표시
+
+-- ✅ 3종 service-role-전용 테이블에 explicit DENY 정책 적용
+SELECT tablename, policyname, qual, with_check
+FROM pg_policies
+WHERE schemaname='public'
+  AND tablename IN ('auth_login_attempts','auth_signup_attempts',
+                    'auth_duplicate_check_attempts','api_idempotency_keys')
+ORDER BY tablename;
+-- 기대: 각 테이블에 `<table>_no_client_access` 가 ALL/false/false 로 표시
+
+-- ✅ realtime publication 에 두 테이블 등록
+SELECT schemaname, tablename FROM pg_publication_tables
+WHERE pubname='supabase_realtime' ORDER BY tablename;
+-- 기대: agent_commissions, withdrawals
+
+-- ✅ 9개 FK 인덱스 존재
+SELECT indexname FROM pg_indexes
+WHERE schemaname='public'
+  AND indexname IN (
+    'idx_deposits_processed_by','idx_futures_orders_filled_position_id',
+    'idx_notices_author_id','idx_staking_positions_product_id',
+    'idx_support_messages_ticket_id','idx_support_tickets_user_id',
+    'idx_wallet_transactions_actor_admin_id','idx_withdrawals_agent_id',
+    'idx_withdrawals_processed_by'
+  )
+ORDER BY indexname;
+-- 기대: 9행
+
+-- ✅ RLS InitPlan 패턴 적용 (auth.uid() 가 SELECT 로 감싸진 정책 비율)
+SELECT
+  (SELECT count(*) FROM pg_policies WHERE schemaname='public') AS total,
+  (SELECT count(*) FROM pg_policies WHERE schemaname='public'
+    AND (qual ILIKE '%( SELECT auth.uid() AS uid)%'
+      OR with_check ILIKE '%( SELECT auth.uid() AS uid)%')) AS optimized;
+-- 기대: optimized >= 40 (테이블별로 누적)
+
+-- ✅ Dead Edge Function 4종이 410 을 반환하는지 (브라우저/CLI 에서)
+-- curl -X POST https://<ref>.supabase.co/functions/v1/user-signup \
+--   -H "Content-Type: application/json" -d '{}'
+-- 기대: HTTP/2 401 (verify_jwt=true 라 anon 거부) — JWT 가 있어도 본문은 410
+```
+
+### 9.9.6 advisor 최종 상태
+
+| 카테고리 | 9.9 이전 | 9.9 이후 |
+|---|---|---|
+| security ERROR | 0 | 0 |
+| security WARN | 2 (is_admin advisor 0029 + leaked password) | **2** (둘 다 의도 — §9.9.1 본문 참고) |
+| security INFO | 3 (rls_enabled_no_policy) | **0** |
+| performance WARN (auth_rls_initplan) | ~40 | **0** |
+| performance WARN (multiple_permissive_policies) | ~30 | ~30 (의도 — own/admin/agent 분리 유지) |
+| performance INFO (unindexed_foreign_keys) | 9 | **0** |
+| performance INFO (unused_index) | 6 | 15 (신규 FK 인덱스 + 데이터 누적 대기) |
+
+`unused_index` INFO 가 9.9 적용 직후 늘어난 것은 추가한 FK 인덱스가 **아직 한 번도 사용되지 않은 상태** 이기 때문입니다. 트래픽이 누적되면 cardinality 와 함께 plan 비용이 갱신되어 자동으로 사용되기 시작합니다. 잘못된 신호가 아닙니다.
+
+---
+
 ## 10. Step 7 — Edge Functions 배포
 
 ### 10.1 디렉토리 구조
 
-`apps/user/supabase/functions/` 폴더에 8개 함수가 있습니다:
+`apps/user/supabase/functions/` 폴더에 **4개 함수**가 있습니다 (§9.9.3 의 cleanup 으로 user-facing 함수 4개는 제거되어 410 stub 으로 prod 에 잠겨 있음).
 
 ```
 functions/
 ├── _shared/
 │   └── cors.ts                            ← 공유 모듈 (모든 함수에서 import)
-├── user-signup/
-│   └── index.ts                           ← 회원가입
-├── validate-referral-code/
-│   └── index.ts                           ← 추천코드 검증
-├── user-record-login/
-│   └── index.ts                           ← 유저 로그인 기록
-├── backoffice-record-login/
-│   └── index.ts                           ← 관리자/에이전트 로그인 기록
 ├── admin-create-backoffice-account/
 │   └── index.ts                           ← 관리자/에이전트 계정 생성
 ├── admin-delete-backoffice-account/
@@ -1916,6 +2143,8 @@ functions/
 └── admin-force-logout/
     └── index.ts                           ← 강제 로그아웃
 ```
+
+> 회원가입(`user-signup`) · 로그인 기록(`user-record-login` / `backoffice-record-login`) · 추천코드 검증(`validate-referral-code`) 은 모두 Next.js API 라우트(`/api/signup`, `/api/record-login`, `/api/signup` 내부 검증)로 이전되어 Edge Function 형태로는 더 이상 운용되지 않습니다. prod 의 동일 슬러그는 410 Gone 본문을 반환하는 무력화 스텁으로 잠겨 있어 어떤 외부 호출도 처리하지 않습니다 (§9.9.3 참고).
 
 ### 10.2 `_shared/cors.ts` (공유 모듈)
 
@@ -1982,13 +2211,9 @@ export function getClientIp(req: Request): string | null {
 
 | 함수명 | 메서드 | JWT 필요 | 입력 (JSON Body) | 비고 |
 |--------|--------|---------|-----------------|------|
-| `user-signup` | POST | ❌ | `{email, password, name, phone, bankName?, bankAccount?, bankAccountHolder?, joinCode?}` | auth user + user_profiles 생성 |
-| `validate-referral-code` | POST | ❌ | `{referralCode}` 또는 `{code}` | `{valid, agentId}` 반환 |
-| `user-record-login` | POST | ✅ | (없음) | login_logs INSERT, user_profiles UPDATE |
-| `backoffice-record-login` | POST | ✅ | (없음) | admins/agents 자동 감지 후 last_login 업데이트 |
-| `admin-create-backoffice-account` | POST | ✅ (admin) | `{accountType:'admin'\|'agent', username, name, email?, phone?, password, role?, grade?, commissionRate?, lossCommissionRate?, feeCommissionRate?, referralCode?}` | 관리자 권한 검증 후 생성 |
-| `admin-delete-backoffice-account` | POST | ✅ (admin) | `{accountType:'admin'\|'agent', userId}` | agent 삭제 시 user_profiles.agent_id NULL 처리 |
-| `admin-update-user-password` | POST | ✅ (admin) | `{userId, newPassword}` | Auth Admin API |
+| `admin-create-backoffice-account` | POST | ✅ (admin) | `{accountType:'admin'\|'agent', username, name, email?, phone?, password, role?, grade?, commissionRate?, lossCommissionRate?, feeCommissionRate?, referralCode?}` | 관리자 권한 검증 후 생성. admin 생성은 super_admin 만 허용 (§9.7) |
+| `admin-delete-backoffice-account` | POST | ✅ (admin) | `{accountType:'admin'\|'agent', userId}` | agent 삭제 시 user_profiles.agent_id NULL 처리. 다른 admin/agent 대상은 super_admin 만 (§9.7) |
+| `admin-update-user-password` | POST | ✅ (admin) | `{userId, newPassword}` | Auth Admin API. 대상이 admin/agent 면 super_admin 만 (§9.7) |
 | `admin-force-logout` | POST | ✅ (admin) | `{userId}` | 모든 세션 무효화 |
 
 ### 10.4 배포 명령어
@@ -1997,44 +2222,21 @@ export function getClientIp(req: Request): string | null {
 # 작업 디렉토리: apps/user
 cd apps/user
 
-# 개별 배포
-supabase functions deploy user-signup
-supabase functions deploy validate-referral-code
-supabase functions deploy user-record-login
-supabase functions deploy backoffice-record-login
+# 4개만 개별 배포 (§9.9.3 cleanup 후 표준)
 supabase functions deploy admin-create-backoffice-account
 supabase functions deploy admin-delete-backoffice-account
 supabase functions deploy admin-update-user-password
 supabase functions deploy admin-force-logout
 
-# 또는 한 번에 모두 배포
+# 또는 한 번에 모두 배포 (apps/user/supabase/functions 안의 4개 함수)
 supabase functions deploy
 ```
 
 ### 10.5 `verify_jwt` 설정
 
-| 함수 | verify_jwt | 이유 |
-|------|-----------|------|
-| `user-signup` | ❌ false | 비로그인 사용자가 호출 |
-| `validate-referral-code` | ❌ false | 회원가입 폼에서 비로그인 호출 |
-| 나머지 6개 | ✅ true | 로그인된 사용자/관리자만 호출 |
+위 4개 함수는 모두 admin 권한 검증이 필요하므로 **`verify_jwt: true` (기본값)** 로 배포합니다. 별도 `--no-verify-jwt` 플래그나 `config.toml` 설정이 필요 없습니다.
 
-`config.toml` 또는 배포 시 플래그로 설정:
-
-```bash
-supabase functions deploy user-signup --no-verify-jwt
-supabase functions deploy validate-referral-code --no-verify-jwt
-```
-
-또는 `apps/user/supabase/config.toml`:
-
-```toml
-[functions.user-signup]
-verify_jwt = false
-
-[functions.validate-referral-code]
-verify_jwt = false
-```
+> ℹ️ 과거에 존재했던 `user-signup` 등 4종은 `verify_jwt: false` 로 배포되었지만, §9.9.3 에서 모두 410 stub + `verify_jwt: true` 로 잠겨 더 이상 비인증 호출이 가능하지 않습니다.
 
 ### 10.6 Edge Function Secrets 설정
 

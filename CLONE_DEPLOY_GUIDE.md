@@ -175,6 +175,7 @@ pnpm install
 | **Step 8 (필수)** | **🔒 2차 하드닝: RLS INSERT/UPDATE 컬럼-무제한 정책 7건 제거 + `notifications` INSERT 정책 강화** (`supabase_migration.md` §9.6) | 2분 |
 | **Step 8B (필수)** | **🔒 3차 하드닝: Edge Function 4종에 `super_admin` 가드 적용 후 재배포 (권한 상승 차단)** (`supabase_migration.md` §9.7) | 1분 |
 | **Step 8C (필수)** | **🔒 4차 하드닝: 인증 Rate-Limit DB 게이트 4종 (login / signup / duplicate-check / is_admin 열거 차단)** (`supabase_migration.md` §9.8) | 2분 |
+| **Step 8D (필수)** | **🔒 5차 감사·최적화 패치: 레거시 RPC 오버로드 제거 + Dead Edge Function 4종 410 stub + 3종 service-role 테이블 explicit DENY + Realtime publication + FK 인덱스 9개 + RLS InitPlan 일괄 최적화** (`supabase_migration.md` §9.9) | 3분 |
 | Step 9 | 검증 쿼리 (테이블·정책·함수 카운트 + 보안 정책 잔존 체크) | 1분 |
 
 > 🚨 **Step 7 누락 시 치명적 취약점**: Step 5에서 생성된 17개 SECURITY DEFINER RPC는 기본값으로 `anon`/`authenticated` 가 EXECUTE 가능합니다. 이 상태에서는 로그인만 한 임의 사용자가 `/rest/v1/rpc/adjust_user_balance` 등을 직접 호출하여 잔액을 임의로 가산하거나 본인의 입출금을 자체 승인할 수 있습니다.
@@ -183,7 +184,9 @@ pnpm install
 >
 > 🚨 **Step 8C 누락 시 위협**: in-memory `Map` 기반 rate-limit 은 Vercel 서버리스에서 무력화됩니다 (인스턴스마다 메모리 분리 + cold-start 초기화). 결과적으로 로그인 브루트포스, 회원가입 봇 스팸, 이메일·전화번호 열거(`/api/signup/check-duplicate`) 가 사실상 unlimited 입니다. Step 8C 의 4개 마이그레이션 (`login_rate_limit_2026_05`, `signup_rate_limit_2026_05`, `duplicate_check_rate_limit_2026_05`, `is_admin_enumeration_hardening_2026_05`) 을 적용하면 모든 카운터가 DB 단일 진실 원천 + 서버 `now()` 윈도우로 통일됩니다.
 >
-> **반드시 Step 7 (`harden_rpc_security_2026_05`), Step 8 (`harden_rls_writes_2026_05`), Step 8C (`*_rate_limit_2026_05` 3종 + `is_admin_enumeration_hardening_2026_05`) 을 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6, §9.8 참고.
+> 🚨 **Step 8D 누락 시 영향**: (a) `/api/admin/wallet/manage` 가 레거시 3-arg `process_deposit/process_withdrawal` 오버로드를 호출해 **승인된 입출금이 wallet_transactions 감사 테이블에 기록되지 않고 처리 admin UID 도 남지 않습니다** — 자금 이상 시 책임 추적 불가. (b) Dead Edge Function 4종(`user-signup`, `user-record-login`, `backoffice-record-login`, `validate-referral-code`) 이 verify_jwt=false 또는 미사용 상태로 prod 에 노출되어 무한 계정 생성·agent UID enumeration 공격면이 잔존합니다. (c) Realtime publication 비어 있어 파트너 페이지 자동 새로고침이 동작하지 않습니다. (d) FK 인덱스 9개 누락으로 admin 페이지가 트래픽 누적 시 급격히 느려집니다. (e) RLS 정책 약 40개가 행당 `auth.uid()` 재평가하여 대용량 쿼리 성능이 저하됩니다.
+>
+> **반드시 Step 7 (`harden_rpc_security_2026_05`), Step 8 (`harden_rls_writes_2026_05`), Step 8C (`*_rate_limit_2026_05` 3종 + `is_admin_enumeration_hardening_2026_05`), Step 8D (`audit_cleanup_2026_05`, `realtime_partner_publication_2026_05`, `fk_indexes_2026_05`, `rls_initplan_optimization_2026_05`, `rls_role_check_optimization_2026_05`) 를 모두 적용**하세요. SQL 전문은 `supabase_migration.md` §9.5, §9.6, §9.8, §9.9 참고.
 >
 > 🔐 **추가 권장 (Supabase Auth 대시보드)**: **Authentication → Policies → "Leaked Password Protection"** 토글을 **On** 으로 변경하세요. 이 옵션은 HaveIBeenPwned 데이터셋과 신규/변경 비밀번호를 대조해 유출된 자격을 차단합니다 (Supabase advisor `auth_leaked_password_protection` 경고 해결). SQL 로는 켤 수 없는 대시보드-온리 설정입니다.
 
@@ -192,17 +195,17 @@ pnpm install
 `supabase_migration.md` Step 9의 다음 쿼리들로 마이그레이션 무결성을 확인:
 
 ```sql
--- 테이블 19개 (futures_orders 포함)
+-- 테이블 24개 (Step 8C rate-limit 3종 + audit_cleanup 정리 후 최종 상태)
 SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
 
--- RLS 활성화된 테이블 19개
+-- RLS 활성화된 테이블 24개 (모두 활성화)
 SELECT COUNT(*) FROM pg_tables
 WHERE schemaname = 'public' AND rowsecurity = true;
 
--- 정책 49개 (Step 7+8 적용 후, 위험 정책 7건 제거된 상태)
+-- 정책 52개 (Step 7+8+8C+8D 적용 후 explicit DENY 3건 추가된 최종 상태)
 SELECT COUNT(*) FROM pg_policies WHERE schemaname = 'public';
 
--- RPC 함수 17개 (fill_limit_order 포함)
+-- RPC 함수 25개 (Step 8C rate-limit 4종 + is_admin + cleanup + 기타 + 4-arg overload)
 SELECT COUNT(*) FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public' AND p.prokind = 'f';
@@ -299,6 +302,61 @@ BEGIN
   DELETE FROM public.auth_login_attempts WHERE email = e;
   RAISE NOTICE 'PASS — rate-limit gate locks then resets';
 END $$;
+
+-- ✅ Step 8D 검증: 레거시 3-arg process_deposit/process_withdrawal 오버로드 제거됨
+SELECT p.proname, pg_get_function_identity_arguments(p.oid) AS args
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname='public' AND p.proname IN ('process_deposit','process_withdrawal')
+ORDER BY p.proname;
+-- 각 함수당 1행만 표시되어야 하며 args 끝에 'p_admin_id uuid' 가 포함되어야 합니다.
+-- 3-arg 오버로드가 보이면 Step 8D `audit_cleanup_2026_05` 누락.
+
+-- ✅ Step 8D 검증: 3종 service-role-전용 테이블에 explicit DENY 정책 적용
+SELECT tablename, policyname, qual, with_check
+FROM pg_policies
+WHERE schemaname='public'
+  AND policyname IN ('auth_signup_attempts_no_client_access',
+                     'auth_duplicate_check_attempts_no_client_access',
+                     'api_idempotency_keys_no_client_access')
+ORDER BY tablename;
+-- 3행이 모두 qual='false', with_check='false' 여야 합니다.
+
+-- ✅ Step 8D 검증: Realtime publication 에 partner 테이블 2종 등록
+SELECT schemaname, tablename FROM pg_publication_tables
+WHERE pubname='supabase_realtime' ORDER BY tablename;
+-- 기대: agent_commissions, withdrawals (둘 다 보여야 partner 페이지 realtime 동작)
+
+-- ✅ Step 8D 검증: 9개 FK covering 인덱스 존재
+SELECT indexname FROM pg_indexes
+WHERE schemaname='public'
+  AND indexname IN (
+    'idx_deposits_processed_by','idx_futures_orders_filled_position_id',
+    'idx_notices_author_id','idx_staking_positions_product_id',
+    'idx_support_messages_ticket_id','idx_support_tickets_user_id',
+    'idx_wallet_transactions_actor_admin_id','idx_withdrawals_agent_id',
+    'idx_withdrawals_processed_by'
+  )
+ORDER BY indexname;
+-- 9행이어야 합니다. 누락 시 `fk_indexes_2026_05` 재실행.
+
+-- ✅ Step 8D 검증: RLS InitPlan 패턴 적용된 정책 카운트 (40개 이상)
+SELECT COUNT(*) AS optimized_policies
+FROM pg_policies
+WHERE schemaname='public'
+  AND (qual ILIKE '%( SELECT auth.uid() AS uid)%'
+    OR with_check ILIKE '%( SELECT auth.uid() AS uid)%');
+-- 기대: 40 이상. 작으면 `rls_initplan_optimization_2026_05` 누락.
+
+-- ✅ Step 8D 검증: Dead Edge Function 4종이 410/401 을 반환하는지 (브라우저/CLI)
+-- curl -X POST https://<프로젝트ref>.supabase.co/functions/v1/user-signup -d '{}'
+-- 기대: HTTP 401 (verify_jwt=true 라 anon 거부) — JWT 가 있어도 본문은 410
+-- 같은 검증을 user-record-login / backoffice-record-login / validate-referral-code 에 반복.
+
+-- ✅ Step 8D 검증: Edge Function 4개만 ACTIVE 상태 (admin 전용)
+-- Supabase Dashboard → Edge Functions 패널에서 다음만 active 여야 합니다:
+--   admin-create-backoffice-account, admin-delete-backoffice-account,
+--   admin-update-user-password, admin-force-logout
+-- user-facing 4개(user-signup 등)는 410 stub 상태로 표시될 수 있으나 호출되지 않습니다.
 ```
 
 > ⚠️ 카운트가 다르다면 마이그레이션이 중간에 실패한 것입니다. SQL Editor 출력에서 에러 메시지를 확인하여 누락된 단계를 재실행하세요.
@@ -407,19 +465,23 @@ supabase link --project-ref <your-project-ref>
 
 ### 7.2 함수 배포
 
+§9.9 (Step 8D) cleanup 이후 admin 전용 4개 함수만 배포합니다. `--no-verify-jwt` 플래그는 **사용하지 않습니다** (모든 함수가 `verify_jwt: true`).
+
 ```bash
-# 모든 함수 일괄 배포 (apps/user/supabase/functions/* 에 위치)
-supabase functions deploy --no-verify-jwt
+# 4개 admin 전용 함수 일괄 배포 (apps/user/supabase/functions/* 에 위치)
+supabase functions deploy
 ```
 
 또는 개별 배포:
 
 ```bash
-supabase functions deploy register-user
-supabase functions deploy record-user-login
-supabase functions deploy record-backoffice-login
-# ... (총 8개)
+supabase functions deploy admin-create-backoffice-account
+supabase functions deploy admin-delete-backoffice-account
+supabase functions deploy admin-update-user-password
+supabase functions deploy admin-force-logout
 ```
+
+> ℹ️ 과거 가이드에 포함되었던 `user-signup`, `user-record-login`, `backoffice-record-login`, `validate-referral-code` 4종은 §9.9.3 의 cleanup 으로 410 stub 화되었고 로컬 source 도 삭제되었습니다. 따라서 `supabase functions deploy` 가 이들을 다시 배포하는 일은 발생하지 않습니다.
 
 ### 7.3 함수 secret 설정
 
@@ -829,13 +891,16 @@ HAVING ABS(
 
 [ Supabase ]
 □ 새 프로젝트 생성 → URL / anon / service_role 키 복사
-□ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B + Step 8C 모두 포함)
-□ 검증 쿼리: 테이블 24(rate-limit 3종 포함), RLS 24, 정책 52, RPC 25(rate-limit 4종 포함) 일치 확인
+□ supabase_migration.md Step 1~9 SQL Editor 실행 (🔒 Step 7 + Step 8 + Step 8B + Step 8C + Step 8D 모두 포함)
+□ 검증 쿼리: 테이블 24, RLS 24, 정책 52, RPC 25(rate-limit 4종 + 4-arg overload 포함) 일치 확인
 □ Step 7 검증: 민감 RPC EXECUTE 가 service_role 한정인지 (Step 4.3 쿼리)
 □ Step 8 검증: 위험 RLS 정책 7건이 모두 제거되었는지 (Step 4.3 쿼리)
 □ Step 8B 검증: Edge Function 4종의 최신 코드(super_admin 가드 포함)가 배포되었는지
 □ Step 8C 검증: auth_*_attempts 테이블 3종 RLS-on/정책 0건 + rate-limit RPC 4종 service_role 전용 (§9.8 쿼리)
 □ Step 8C 라이브 테스트: §4.3 의 DO 블록으로 게이트 lock/reset 동작 확인
+□ Step 8D 검증: 3-arg process_deposit/process_withdrawal 제거, FK 인덱스 9개, realtime publication 2종 (§4.3 쿼리)
+□ Step 8D 검증: RLS InitPlan 패턴 정책 40개 이상 + 3개 service-role 테이블 explicit DENY
+□ Step 8D 검증: Edge Function 4종(user-*, validate-referral-code)이 410/401 반환
 □ Authentication → "Leaked Password Protection" 토글 ON (HIBP 검사, Supabase advisor 경고 해결)
 
 [ 로컬 ]
@@ -844,10 +909,11 @@ HAVING ABS(
 □ npm install --legacy-peer-deps (루트, apps/user 둘 다)
 □ apps/user에서 npm run build 성공 확인
 
-[ Edge Functions ]
+[ Edge Functions — admin 전용 4개만 ]
 □ supabase link --project-ref <ref>
-□ supabase functions deploy
-□ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...
+□ supabase functions deploy (admin-create / admin-delete / admin-update-password / admin-force-logout)
+□ supabase secrets set ALLOWED_ORIGIN="https://yourdomain.com"
+□ user-facing 4종(user-signup 등)은 prod 에 이미 410 stub 으로 잠겨 있어 별도 작업 불필요
 
 [ Vercel ]
 □ GitHub 저장소 import (Framework: Next.js)
@@ -872,6 +938,8 @@ HAVING ABS(
 □ 🔒 §10.5 의 RLS + 권한상승 모의 침투 8종 모두 차단되는지 (Step 7+8+8B 적용 검증)
 □ 🔒 로그인/회원가입 폼이 method="post" 로 제출되는지 (URL에 password 노출 없음)
 □ 🔒 로그인 폼에 잘못된 비밀번호 9회 반복 시 "너무 많은 로그인 시도입니다" 가 표시되는지 (Step 8C 게이트)
+□ 🔒 admin 입금/출금 승인 후 `SELECT * FROM wallet_transactions WHERE actor_admin_id = '<승인한 admin UID>' ORDER BY created_at DESC LIMIT 5` 로 감사 행 생성 확인 (Step 8D)
+□ 🔒 파트너 페이지 열어둔 채 admin 이 해당 agent 의 withdrawal 을 승인 → realtime 으로 자동 갱신되는지 (Step 8D realtime)
 
 [ 마무리 ]
 □ git tag v1.0.0-clone && git push --tags
@@ -885,11 +953,11 @@ HAVING ABS(
 1. **`.env` 절대 commit 금지** — `.gitignore`에 등록되어 있지만, 신규 환경에서는 반드시 `git check-ignore .env` 로 확인.
 2. **`SUPABASE_SERVICE_ROLE_KEY`는 서버에서만** — 클라이언트 코드에서 `process.env.SUPABASE_SERVICE_ROLE_KEY` 참조 시 빌드는 통과하지만 production 번들에 `undefined`로 들어가 보안/동작 모두 문제.
 3. **Next.js 16 + React 19 alpha** — peer-dep 경고가 다수 발생. `--legacy-peer-deps` 사용.
-4. **Supabase realtime** — 파트너 페이지가 `agent_commissions`, `withdrawals` 채널을 구독합니다. Supabase 대시보드 **Database → Replication → realtime** 에서 두 테이블의 replication이 활성화되어 있어야 합니다.
+4. **Supabase realtime** — 파트너 페이지가 `agent_commissions`, `withdrawals` 채널을 구독합니다. Step 8D 의 `realtime_partner_publication_2026_05` 마이그레이션이 두 테이블을 `supabase_realtime` publication 에 자동 추가 + REPLICA IDENTITY FULL 설정합니다. 누락 시 partner 페이지가 새로고침 없이 갱신되지 않습니다.
 5. **타임존** — DB 자체는 UTC 저장. 표시는 항상 `formatDate.ts` 의 KST 헬퍼를 거치도록 통일.
 6. **`CRON_SECRET`** — Vercel Cron 호출 인증용. 누락 시 cron이 fail-closed로 401 반환하여 미체결 지정가 주문이 영원히 체결되지 않습니다.
 
 ---
 
-문서 최종 업데이트: 2026-05-16 (Step 8C 인증 Rate-Limit DB 게이트 + is_admin 열거 차단 추가; 카운트 24/24/52/25)
-관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7, §9.8), `partner_migration.md`
+문서 최종 업데이트: 2026-05-16 (Step 8D 전역 감사·최적화 패치 5종 추가 — 4-arg RPC 강제 + 410 stub + explicit DENY + realtime publication + FK 인덱스 9 + RLS InitPlan 최적화; 카운트 24/24/52/25 유지)
+관련 문서: `supabase_migration.md` (§9.5, §9.6, §9.7, §9.8, §9.9), `partner_migration.md`

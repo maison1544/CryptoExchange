@@ -110,6 +110,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Request not found" }, { status: 404 });
     }
 
+    // Use the 4-arg overload so the RPC can (a) row-lock user_profiles
+    // before crediting balance to prevent race conditions on concurrent
+    // approvals and (b) write the wallet_transactions audit row with the
+    // acting admin's UID. The legacy 3-arg overload skipped both of
+    // those — it's scheduled for removal in the same migration.
     const rpcName = kind === "deposit" ? "process_deposit" : "process_withdrawal";
     const rpcParams =
       kind === "deposit"
@@ -117,11 +122,13 @@ export async function POST(req: NextRequest) {
             p_deposit_id: requestId,
             p_action: action,
             p_reason: reason,
+            p_admin_id: user.id,
           }
         : {
             p_withdrawal_id: requestId,
             p_action: action,
             p_reason: reason,
+            p_admin_id: user.id,
           };
 
     const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(

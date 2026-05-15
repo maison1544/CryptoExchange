@@ -1,23 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 
 const supabase = createClient();
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-async function callEdgeFunction(fnName: string, body: unknown, jwt?: string) {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    apikey: SUPABASE_ANON_KEY,
-  };
-  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/${fnName}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
 
 async function callApiRoute(path: string, body: unknown, jwt?: string) {
   const headers: Record<string, string> = {
@@ -120,8 +103,4 @@ export async function recordBackofficeLogin(accessToken?: string) {
     { accountType: "backoffice" },
     token,
   );
-}
-
-export async function validateReferralCode(code: string) {
-  return callEdgeFunction("validate-referral-code", { referralCode: code });
 }
