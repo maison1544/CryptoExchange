@@ -67,6 +67,7 @@ type ProductContract = {
 type StakingProductDbRow = {
   id: number;
   name: string;
+  product_type: "stable" | "variable" | null;
   duration_days: number;
   annual_rate: number | string | null;
   default_settlement_rate: number | string | null;
@@ -135,7 +136,7 @@ function StakingProductsTab() {
         productRows.map((product) => ({
           id: product.id,
           name: product.name,
-          type: product.name?.includes("변동")
+          type: product.product_type === "variable"
             ? ("변동형" as const)
             : ("안정형" as const),
           period: product.duration_days,
@@ -630,7 +631,8 @@ function StakingProductsTab() {
               <button
                 onClick={async () => {
                   const productData = {
-                    name: `${form.type} ${form.period}일`,
+                    name: form.name.trim() || `${form.type} ${form.period}일`,
+                    product_type: form.type === "변동형" ? "variable" : "stable",
                     coin: "USDT",
                     min_amount: Number(form.minAmount) || 100,
                     max_amount: Number(form.maxAmount) || 100000,
@@ -703,6 +705,12 @@ function StakingProductsTab() {
               </button>
             </div>
             <div className="p-5 space-y-4">
+              <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs leading-relaxed text-blue-200">
+                상품 결과처리는 즉시 지급이 아니라 이 상품의 기본 만기 결과값을
+                예약하는 기능입니다. 개별 계약에 별도 예약값이 없으면 만기일
+                자동지급 시 이 값이 적용됩니다. 값을 비우면 상품의 기본 연이율과
+                실제 예치 기간 기준으로 자동 정산됩니다.
+              </div>
               <div className="bg-gray-800/50 rounded-lg p-3 text-xs space-y-1">
                 <div className="flex justify-between">
                   <span className="text-gray-400">가입자 수</span>

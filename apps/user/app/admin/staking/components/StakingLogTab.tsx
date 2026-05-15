@@ -35,6 +35,7 @@ type LogRow = {
   name: string;
   partner: string;
   symbol: string;
+  productName: string;
   type: string;
   amount: number;
   balance: number;
@@ -43,6 +44,8 @@ type LogRow = {
 };
 
 type StakingLogProduct = {
+  name: string | null;
+  coin?: string | null;
   symbol: string | null;
   duration_days: number | null;
 };
@@ -79,7 +82,11 @@ function mapLogRows(
     memberId: emailById[position.user_id] || "-",
     name: nameById[position.user_id] || "-",
     partner: "-",
-    symbol: position.staking_products?.symbol || "USDT",
+    symbol:
+      position.staking_products?.coin ||
+      position.staking_products?.symbol ||
+      "USDT",
+    productName: position.staking_products?.name || "-",
     type: statusLabel[position.status] || position.status,
     amount: Number(position.amount),
     balance: Number(position.total_earned),
@@ -146,7 +153,13 @@ export function StakingLogTab() {
   }, [isInitialized, role]);
 
   useEffect(() => {
-    void loadData();
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadData]);
 
   const filteredLogs = useMemo(() => {
@@ -274,6 +287,7 @@ export function StakingLogTab() {
               "이름",
               "파트너",
               "코인",
+              "상품명",
               "구분",
               "금액",
               "잔액",
@@ -289,6 +303,9 @@ export function StakingLogTab() {
                 <AdminTableCell>{item.partner}</AdminTableCell>
                 <AdminTableCell className="font-medium text-yellow-500">
                   {item.symbol}
+                </AdminTableCell>
+                <AdminTableCell className="min-w-32 text-white">
+                  {item.productName}
                 </AdminTableCell>
                 <AdminTableCell>
                   <span

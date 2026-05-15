@@ -3,6 +3,7 @@ import { AdminCard } from "@/components/admin/ui/AdminCard";
 import { AdminSearchFilterCard } from "@/components/admin/ui/AdminSearchFilterCard";
 import { AdminSummaryCard } from "@/components/admin/ui/AdminSummaryCard";
 import { AdminModal } from "@/components/admin/ui/AdminModal";
+import { AdminActionDropdown } from "@/components/admin/ui/AdminActionDropdown";
 import {
   AdminTable,
   AdminTableRow,
@@ -39,6 +40,7 @@ type StakingRow = {
   name: string;
   partner: string;
   symbol: string;
+  productName: string;
   amount: number;
   period: number;
   apy: string;
@@ -49,6 +51,8 @@ type StakingRow = {
 };
 
 type StakingProductMeta = {
+  name: string | null;
+  coin?: string | null;
   symbol: string | null;
   duration_days: number | null;
   apy: number | string | null;
@@ -96,7 +100,8 @@ function mapStakingRows(
       memberId: emailById[position.user_id] || "-",
       name: nameById[position.user_id] || "-",
       partner: "-",
-      symbol: product?.symbol || "USDT",
+      symbol: product?.coin || product?.symbol || "USDT",
+      productName: product?.name || "-",
       amount: Number(position.amount),
       period: product?.duration_days || 30,
       apy: `${product?.apy ?? product?.annual_rate ?? 0}%`,
@@ -178,7 +183,13 @@ export function StakingListTab() {
   }, [addToast, isInitialized, role]);
 
   useEffect(() => {
-    void loadData();
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadData]);
 
   const filteredStakingList = useMemo(() => {
@@ -370,6 +381,7 @@ export function StakingListTab() {
               "이름",
               "파트너",
               "코인",
+              "상품명",
               "스테이킹액",
               "만기일수",
               "수익률",
@@ -397,6 +409,9 @@ export function StakingListTab() {
                 </AdminTableCell>
                 <AdminTableCell className="font-medium text-yellow-500 text-xs">
                   {item.symbol}
+                </AdminTableCell>
+                <AdminTableCell className="text-xs text-white">
+                  {item.productName}
                 </AdminTableCell>
                 <AdminTableCell className="text-center text-xs">
                   {formatDisplayNumber(item.amount, {
@@ -437,25 +452,25 @@ export function StakingListTab() {
                 </AdminTableCell>
                 <AdminTableCell>
                   {item.status === "진행중" && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        className="px-2 py-1 bg-yellow-600/30 hover:bg-yellow-600/50 text-yellow-400 text-[10px] rounded transition-colors disabled:opacity-50"
-                        onClick={() => {
-                          setSettleRate("");
-                          setSettleTarget(item);
-                        }}
-                        disabled={isProcessing}
-                      >
-                        결과처리
-                      </button>
-                      <button
-                        className="px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-400 text-[10px] rounded transition-colors disabled:opacity-50"
-                        onClick={() => setCancelTarget(item)}
-                        disabled={isProcessing}
-                      >
-                        강제취소
-                      </button>
-                    </div>
+                    <AdminActionDropdown
+                      disabled={isProcessing}
+                      label="관리"
+                      options={[
+                        {
+                          label: "즉시 결과처리",
+                          onSelect: () => {
+                            setSettleRate("");
+                            setSettleTarget(item);
+                          },
+                          tone: "success",
+                        },
+                        {
+                          label: "강제취소",
+                          onSelect: () => setCancelTarget(item),
+                          tone: "danger",
+                        },
+                      ]}
+                    />
                   )}
                 </AdminTableCell>
               </AdminTableRow>
@@ -560,6 +575,11 @@ export function StakingListTab() {
       >
         {settleTarget && (
           <div className="space-y-4">
+            <div className="rounded-lg border border-orange-500/20 bg-orange-500/10 p-3 text-xs leading-relaxed text-orange-200">
+              스테이킹 현황의 결과처리는 선택한 계약을 즉시 완료 처리하고 원금과
+              산정 수익을 바로 스테이킹 잔고로 지급합니다. 상품 관리의 상품
+              결과처리는 만기 자동지급 때 사용할 기본 예약값을 저장하는 기능입니다.
+            </div>
             <div className="bg-[#0d1117] rounded-lg p-4 space-y-2 text-sm">
               {[
                 ["회원", `${settleTarget.name} (${settleTarget.memberId})`],

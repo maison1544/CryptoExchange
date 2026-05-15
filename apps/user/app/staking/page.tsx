@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { UserModal } from "@/components/ui/UserModal";
 import { ActionButton } from "@/components/ui/ActionButton";
@@ -19,13 +19,10 @@ import type { DbStakingPosition, DbStakingProduct } from "@/lib/types/database";
 
 const supabase = createClient();
 
-const stakingPeriods = [
-  { days: 7, rateMin: 0.5, rateMax: 1.0 },
-  { days: 30, rateMin: 2.0, rateMax: 5.0 },
-  { days: 90, rateMin: 6.0, rateMax: 10.0 },
-  { days: 180, rateMin: 12.0, rateMax: 20.0 },
-  { days: 365, rateMin: 25.0, rateMax: 35.0 },
-];
+const stakingTypeLabels: Record<"stable" | "variable", string> = {
+  stable: "안정형",
+  variable: "변동형",
+};
 
 const statusMap: Record<string, string> = {
   active: "진행중",
@@ -55,7 +52,7 @@ type StakingHistoryRecord = {
 type StakingPositionRecord = DbStakingPosition & {
   staking_products: Pick<
     DbStakingProduct,
-    "name" | "duration_days" | "annual_rate"
+    "name" | "product_type" | "duration_days" | "annual_rate"
   > | null;
 };
 
@@ -78,13 +75,29 @@ export default function StakingPage() {
   const [activeStakingCount, setActiveStakingCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  const selectedTypeProducts = useMemo(
+    () => products.filter((product) => product.product_type === stakingType),
+    [products, stakingType],
+  );
+  const selectedProduct = useMemo(
+    () =>
+      selectedPeriod === null
+        ? null
+        : (products.find(
+            (product) =>
+              product.product_type === stakingType &&
+              product.duration_days === selectedPeriod,
+          ) ?? null),
+    [products, selectedPeriod, stakingType],
+  );
+
   const loadStakingData = useCallback(async () => {
     if (!user) return;
 
     const [posRes, balRes] = await Promise.all([
       supabase
         .from("staking_positions")
-        .select("*, staking_products(name, duration_days, annual_rate)")
+        .select("*, staking_products(name, product_type, duration_days, annual_rate)")
         .eq("user_id", user.id)
         .order("started_at", { ascending: false }),
       supabase
@@ -100,7 +113,9 @@ export default function StakingPage() {
       stakingPositions.map((p) => ({
         id: p.id,
         date: formatDateTime(p.started_at),
-        type: "안정형",
+        type: p.staking_products?.product_type
+          ? stakingTypeLabels[p.staking_products.product_type]
+          : "-",
         amount: Number(p.amount),
         period: `${p.staking_products?.duration_days ?? 0}일`,
         rate: p.staking_products?.annual_rate
@@ -142,6 +157,7 @@ export default function StakingPage() {
       .from("staking_products")
       .select("*")
       .eq("is_active", true)
+      .order("product_type")
       .order("duration_days")
       .then(({ data }) => {
         if (data) setProducts(data as DbStakingProduct[]);
@@ -149,7 +165,13 @@ export default function StakingPage() {
   }, []);
 
   useEffect(() => {
-    void loadStakingData();
+    const timer = window.setTimeout(() => {
+      void loadStakingData();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadStakingData]);
 
   const availableBalance = userBalance;
@@ -228,7 +250,10 @@ export default function StakingPage() {
                 </label>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setStakingType("stable")}
+                    onClick={() => {
+                      setStakingType("stable");
+                      setSelectedPeriod(null);
+                    }}
                     className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
                       stakingType === "stable"
                         ? "bg-yellow-500 text-black"
@@ -238,7 +263,10 @@ export default function StakingPage() {
                     안정형
                   </button>
                   <button
-                    onClick={() => setStakingType("variable")}
+                    onClick={() => {
+                      setStakingType("variable");
+                      setSelectedPeriod(null);
+                    }}
                     className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
                       stakingType === "variable"
                         ? "bg-yellow-500 text-black"
@@ -261,22 +289,27 @@ export default function StakingPage() {
                   스테이킹 기간
                 </label>
                 <div className="space-y-2">
-                  {stakingPeriods.map((p) => (
+                  {selectedTypeProducts.map((p) => (
                     <button
-                      key={p.days}
-                      onClick={() => setSelectedPeriod(p.days)}
+                      key={p.id}
+                      onClick={() => setSelectedPeriod(p.duration_days)}
                       className={`w-full flex items-center justify-between rounded-2xl px-4 py-3 text-sm transition-colors ${
-                        selectedPeriod === p.days
+                        selectedPeriod === p.duration_days
                           ? "bg-yellow-500/10 border border-yellow-500/30 text-yellow-500"
                           : "border border-white/8 bg-white/3 text-gray-300 hover:bg-white/5"
                       }`}
                     >
-                      <span className="font-medium">{p.days}일</span>
+                      <span className="font-medium">{p.duration_days}일</span>
                       <span className="text-xs">
-                        예상 수익률 : {p.rateMin}% ~ {p.rateMax}%
+                        예상 수익률 : {formatRatePercent(Number(p.annual_rate) * 100)}
                       </span>
                     </button>
                   ))}
+                  {selectedTypeProducts.length === 0 && (
+                    <div className="rounded-2xl border border-white/8 bg-white/3 px-4 py-4 text-center text-xs text-gray-500">
+                      현재 판매중인 {stakingTypeLabels[stakingType]} 상품이 없습니다.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -444,7 +477,9 @@ export default function StakingPage() {
                   if (!user) return;
                   if (!selectedPeriod || !amount) return;
                   const product = products.find(
-                    (p) => p.duration_days === selectedPeriod,
+                    (p) =>
+                      p.product_type === stakingType &&
+                      p.duration_days === selectedPeriod,
                   );
                   if (!product) {
                     addToast({
@@ -455,6 +490,31 @@ export default function StakingPage() {
                     return;
                   }
                   const numAmount = Number(amount);
+                  if (numAmount < Number(product.min_amount)) {
+                    addToast({
+                      title: "스테이킹 신청 불가",
+                      message: `최소 스테이킹 금액은 ${formatUsdt(Number(product.min_amount), {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}입니다.`,
+                      type: "error",
+                    });
+                    return;
+                  }
+                  if (
+                    product.max_amount !== null &&
+                    numAmount > Number(product.max_amount)
+                  ) {
+                    addToast({
+                      title: "스테이킹 신청 불가",
+                      message: `최대 스테이킹 금액은 ${formatUsdt(Number(product.max_amount), {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}입니다.`,
+                      type: "error",
+                    });
+                    return;
+                  }
                   if (numAmount > availableBalance) {
                     addToast({
                       title: "스테이킹 신청 불가",
@@ -573,15 +633,10 @@ export default function StakingPage() {
                 <div className="text-gray-500">예상 수익률</div>
                 <div className="text-yellow-500 font-medium">
                   {
-                    stakingPeriods.find((p) => p.days === selectedPeriod)
-                      ?.rateMin
+                    selectedProduct
+                      ? formatRatePercent(Number(selectedProduct.annual_rate) * 100)
+                      : "-"
                   }
-                  % ~{" "}
-                  {
-                    stakingPeriods.find((p) => p.days === selectedPeriod)
-                      ?.rateMax
-                  }
-                  %
                 </div>
               </div>
             </div>

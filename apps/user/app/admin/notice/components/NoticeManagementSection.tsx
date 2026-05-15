@@ -105,7 +105,13 @@ export function NoticeManagementSection({
   }, []);
 
   useEffect(() => {
-    void loadNotices();
+    const timer = window.setTimeout(() => {
+      void loadNotices();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadNotices]);
 
   const filteredNotices = useMemo(() => {
@@ -608,6 +614,11 @@ export function NoticeManagementSection({
                   setForm((prev) => ({ ...prev, eventEndDate: e.target.value }))
                 }
               />
+              <p className="text-xs leading-relaxed text-gray-500">
+                이벤트 종료일은 사용자 공지 목록에서 &quot;~종료일&quot; 배지로 표시되는
+                안내용 날짜입니다. 현재 자동 비공개 전환이나 노출 차단에는 사용되지
+                않습니다.
+              </p>
             </div>
           )}
           <label className="inline-flex items-center gap-2 text-sm text-gray-300">

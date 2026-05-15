@@ -131,6 +131,7 @@ export interface DbFuturesOrder {
 export interface DbStakingProduct {
   id: number;
   name: string;
+  product_type: "stable" | "variable";
   coin: string;
   min_amount: number;
   max_amount: number | null;

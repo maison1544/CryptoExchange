@@ -389,7 +389,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...your-anon-key...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...your-service-role-key...
 
 # Vercel Cron 호출 인증용 비밀 토큰 (임의의 강한 문자열 권장: openssl rand -hex 32)
-# 이 값이 비어있으면 /api/cron/execute-pending-orders 가 fail-closed 로 401 반환합니다.
+# 이 값이 비어있으면 /api/cron/execute-pending-orders 및 /api/cron/settle-due-stakings 가 fail-closed 로 401 반환합니다.
 CRON_SECRET=<openssl rand -hex 32 또는 임의의 64자 문자열>
 ```
 
@@ -543,7 +543,7 @@ Vercel **Project → Settings → Environment Variables** 에서 다음 4개를 
 | `CRON_SECRET` | `openssl rand -hex 32` 출력 등 임의 강한 비밀 | Production (최소) |
 
 > ⚠️ 모든 환경(Production / Preview / Development)에 동일하게 등록해야 PR 프리뷰 배포에서도 동일 동작.
-> ⚠️ **`CRON_SECRET` 누락 시 cron 라우트가 401로 fail-closed** 되어 미체결 지정가 주문이 영원히 체결되지 않습니다. Vercel 대시보드 → Settings → Cron Jobs 가 자동으로 같은 시크릿을 `Authorization: Bearer ...` 헤더로 주입하므로 별도 코드 변경 없이 동작합니다.
+> ⚠️ **`CRON_SECRET` 누락 시 cron 라우트가 401로 fail-closed** 되어 미체결 지정가 주문 및 만기 도래 스테이킹 자동정산이 처리되지 않습니다. Vercel 대시보드 → Settings → Cron Jobs 가 자동으로 같은 시크릿을 `Authorization: Bearer ...` 헤더로 주입하므로 별도 코드 변경 없이 동작합니다.
 
 ### 8.3 첫 배포
 
@@ -554,6 +554,7 @@ Vercel **Project → Settings → Environment Variables** 에서 다음 4개를 
 - [ ] 빌드 로그 마지막에 `✓ Compiled successfully`
 - [ ] Functions 섹션에 API 라우트가 정상 등록
 - [ ] Cron 섹션에 `/api/cron/execute-pending-orders` 매분 스케줄 등록 (Pro 플랜 이상)
+- [ ] Cron 섹션에 `/api/cron/settle-due-stakings` 5분 주기 스케줄 등록
 
 ### 8.4 Cron 검증
 
@@ -634,6 +635,7 @@ Last Run    Status    Duration
 ```bash
 # Vercel CLI로 cron 강제 실행
 vercel cron run /api/cron/execute-pending-orders
+vercel cron run /api/cron/settle-due-stakings
 ```
 
 또는 대시보드 **Cron Jobs → Run**.
@@ -967,7 +969,7 @@ HAVING ABS(
 3. **Next.js 16 + React 19 alpha** — peer-dep 경고가 다수 발생. `--legacy-peer-deps` 사용.
 4. **Supabase realtime** — 파트너 페이지가 `agent_commissions`, `withdrawals` 채널을 구독합니다. Step 8D 의 `realtime_partner_publication_2026_05` 마이그레이션이 두 테이블을 `supabase_realtime` publication 에 자동 추가 + REPLICA IDENTITY FULL 설정합니다. 누락 시 partner 페이지가 새로고침 없이 갱신되지 않습니다.
 5. **타임존** — DB 자체는 UTC 저장. 표시는 항상 `formatDate.ts` 의 KST 헬퍼를 거치도록 통일.
-6. **`CRON_SECRET`** — Vercel Cron 호출 인증용. 누락 시 cron이 fail-closed로 401 반환하여 미체결 지정가 주문이 영원히 체결되지 않습니다.
+6. **`CRON_SECRET`** — Vercel Cron 호출 인증용. 누락 시 cron이 fail-closed로 401 반환하여 미체결 지정가 주문과 만기 도래 스테이킹 정산이 처리되지 않습니다.
 
 ---
 
