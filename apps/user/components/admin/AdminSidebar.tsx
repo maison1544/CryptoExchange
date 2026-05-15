@@ -31,7 +31,7 @@ export function AdminSidebar() {
   return (
     <aside className="shell-chrome hidden h-full w-44 shrink-0 border-r hairline-divider xl:flex xl:flex-col">
       <div className="border-b hairline-divider px-3 py-3">
-        <Link href="/admin" className="flex items-center gap-2.5">
+        <Link href="/admin" prefetch={false} className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-yellow-500/90 text-sm font-semibold text-black">
             N
           </div>
@@ -63,6 +63,7 @@ export function AdminSidebar() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch={false}
               className={cn(
                 "flex items-center gap-2 rounded-xl px-2 py-2.5 text-[12px] font-medium leading-4",
                 isActive

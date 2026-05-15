@@ -154,7 +154,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(newSession?.user ?? null);
 
       if (event === "INITIAL_SESSION") {
-        if (!cancelled) setIsInitialized(true);
         if (newSession?.user) {
           try {
             const r = await withTimeout(
@@ -165,12 +164,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!cancelled) setRole(narrowRole(r));
           } catch {
             if (!cancelled) setRole(null);
+          } finally {
+            if (!cancelled) setIsInitialized(true);
           }
         } else if (!cancelled) {
           setRole(null);
+          setIsInitialized(true);
         }
       } else if (event === "SIGNED_IN") {
-        if (!cancelled) setIsInitialized(true);
         // Detect role only if login() is NOT actively running (e.g. page refresh)
         if (!loginInProgressRef.current && newSession?.user) {
           try {
@@ -182,7 +183,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!cancelled) setRole(narrowRole(r));
           } catch {
             // ignore — role will remain as-is
+          } finally {
+            if (!cancelled) setIsInitialized(true);
           }
+        } else if (!cancelled) {
+          setIsInitialized(true);
         }
       } else if (event === "SIGNED_OUT") {
         if (!cancelled) {
@@ -197,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const timer = window.setTimeout(() => {
       if (!cancelled) setIsInitialized(true);
-    }, 3000);
+    }, ROLE_REQUEST_TIMEOUT_MS + 1000);
 
     return () => {
       cancelled = true;

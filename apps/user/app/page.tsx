@@ -109,6 +109,7 @@ export default function Home() {
                 </Link>
                 <Link
                   href="/assets"
+                  prefetch={false}
                   className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/3 px-5 py-3 text-sm font-medium text-gray-200 hover:bg-white/5 hover:text-white"
                 >
                   자산 보기

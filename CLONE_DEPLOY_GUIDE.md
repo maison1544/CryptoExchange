@@ -599,7 +599,7 @@ Last Run    Status    Duration
 - `/admin/login` → 위에서 만든 admin 계정으로 로그인 → `/admin` 대시보드 진입 확인
 - `/partner/login` → 위에서 만든 agent 계정으로 로그인 → `/partner` 대시보드 진입 확인
 
-> ℹ️ 두 로그인 페이지 모두 `window.location.assign(...)` 으로 full page navigation을 사용해, Supabase 쿠키 정착 race condition을 방지합니다 (회귀 방지).
+> ℹ️ 사용자/관리자/파트너 로그인은 모두 `window.location.assign(...)` 으로 full page navigation을 사용해, Supabase 쿠키 정착 전에 RSC fetch나 middleware 검증이 먼저 실행되는 race condition을 방지합니다 (회귀 방지). 보호 라우트 링크는 `prefetch={false}` 로 로그인 전 redirect 응답 캐시를 만들지 않도록 합니다.
 
 ---
 
@@ -610,6 +610,7 @@ Last Run    Status    Duration
 ### 10.1 인증 흐름
 
 - [ ] 신규 사용자 회원가입 → 가입 승인 대기 → 관리자가 승인 → 로그인 가능
+- [ ] 일반 사용자 로그인 1회 후 `/wallet`, `/settings`, `/assets`, `/profile` 진입 시 로그인 페이지로 튕기지 않음 (강력 새로고침 불필요)
 - [ ] 관리자 로그인 1회로 `/admin`에 진입 (새로고침 없이)
 - [ ] 파트너 로그인 1회로 `/partner`에 진입
 - [ ] 로그아웃 후 `/admin/login` 으로 자동 리다이렉트

@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotification } from "@/contexts/NotificationContext";
@@ -10,7 +9,6 @@ import { LoadingSpinnerIcon } from "@/components/admin/ui/AdminLoadingSpinner";
 import { useAsyncAction } from "@/hooks/useAsyncAction";
 
 export default function LoginPage() {
-  const router = useRouter();
   const { login } = useAuth();
   const { addToast } = useNotification();
   const [showPassword, setShowPassword] = useState(false);
@@ -33,7 +31,7 @@ export default function LoginPage() {
     }
 
     addToast({ title: "로그인 성공", message: "환영합니다!", type: "success" });
-    router.push("/trade");
+    window.location.assign("/trade");
   };
 
   const { run: handleSubmit, isPending: loading } = useAsyncAction(submitLogin);

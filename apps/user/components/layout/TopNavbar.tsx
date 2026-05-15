@@ -221,6 +221,7 @@ export function TopNavbar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={false}
                   className={cn(
                     "flex items-center gap-2 rounded-full px-3 py-2 text-[13px] font-medium",
                     isActive
@@ -247,6 +248,7 @@ export function TopNavbar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={false}
                   className={cn(
                     "flex items-center gap-2 rounded-full px-3 py-2 text-[12px] font-medium",
                     isActive ? "bg-white/[0.05] text-white" : item.accentClass,
@@ -262,6 +264,7 @@ export function TopNavbar() {
           <div className="hidden items-center gap-1 border-r hairline-divider pr-3 sm:flex">
             <Link
               href="/history"
+              prefetch={false}
               className="flex h-10 w-10 items-center justify-center rounded-full text-gray-400 hover:bg-white/[0.04] hover:text-white"
               title="거래 내역"
             >
@@ -277,6 +280,7 @@ export function TopNavbar() {
             <NotificationBell />
             <Link
               href="/settings"
+              prefetch={false}
               className="flex h-10 w-10 items-center justify-center rounded-full text-gray-400 hover:bg-white/[0.04] hover:text-white"
               title="설정"
             >
@@ -288,6 +292,7 @@ export function TopNavbar() {
             <div className="flex items-center gap-2">
               <Link
                 href="/profile"
+                prefetch={false}
                 className="flex items-center gap-3 rounded-full border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 hover:bg-white/[0.04]"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.04] text-gray-300">

@@ -22,15 +22,24 @@ export async function middleware(request: NextRequest) {
   }
 
   const { response, user } = await updateSession(request);
+  response.headers.set("Cache-Control", "no-store");
 
   if (!user) {
     if (pathname.startsWith("/admin")) {
-      return NextResponse.redirect(new URL("/admin/login", request.url));
+      const redirect = NextResponse.redirect(new URL("/admin/login", request.url));
+      redirect.headers.set("Cache-Control", "no-store");
+      return redirect;
     }
     if (pathname.startsWith("/partner")) {
-      return NextResponse.redirect(new URL("/partner/login", request.url));
+      const redirect = NextResponse.redirect(
+        new URL("/partner/login", request.url),
+      );
+      redirect.headers.set("Cache-Control", "no-store");
+      return redirect;
     }
-    return NextResponse.redirect(new URL("/login", request.url));
+    const redirect = NextResponse.redirect(new URL("/login", request.url));
+    redirect.headers.set("Cache-Control", "no-store");
+    return redirect;
   }
 
   return response;
