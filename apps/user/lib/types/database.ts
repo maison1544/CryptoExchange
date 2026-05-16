@@ -4,6 +4,7 @@ export interface DbAdmin {
   id: string;
   username: string;
   name: string;
+  email: string | null;
   role: "super_admin" | "admin";
   is_active: boolean;
   last_login_at: string | null;

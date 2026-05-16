@@ -168,6 +168,15 @@ export function AdminAccountsTab() {
       resetForm();
       setIsCreateOpen(false);
       await loadAdmins();
+    } catch (error) {
+      addToast({
+        title: "관리자 등록 실패",
+        message:
+          error instanceof Error
+            ? error.message
+            : "관리자를 등록하지 못했습니다.",
+        type: "error",
+      });
     } finally {
       setCreating(false);
     }

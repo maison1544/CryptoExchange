@@ -75,6 +75,9 @@ Deno.serve(async (req: Request) => {
       feeCommissionRate,
       role,
       referralCode,
+      bankName,
+      bankAccount,
+      bankAccountHolder,
     } = body || {};
 
     if (accountType !== "admin" && accountType !== "agent")
@@ -134,6 +137,7 @@ Deno.serve(async (req: Request) => {
         id: createdAuth.user.id,
         username: username.trim(),
         name: name.trim(),
+        email: finalEmail,
         role,
         is_active: true,
       });
@@ -196,6 +200,13 @@ Deno.serve(async (req: Request) => {
       commission_rate: Number(commissionRate) || 0,
       loss_commission_rate: Number(lossCommissionRate) || 0,
       fee_commission_rate: Number(feeCommissionRate) || 0,
+      bank_name: typeof bankName === "string" ? bankName.trim() || null : null,
+      bank_account:
+        typeof bankAccount === "string" ? bankAccount.trim() || null : null,
+      bank_account_holder:
+        typeof bankAccountHolder === "string"
+          ? bankAccountHolder.trim() || null
+          : null,
       referral_code: finalCode,
       is_active: true,
     });

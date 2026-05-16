@@ -48,6 +48,7 @@ import {
   type AdminPartnerRow,
 } from "@/lib/api/adminPartners";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { BANK_OPTIONS } from "@/lib/constants/banks";
 import { formatUsdt } from "@/lib/utils/numberFormat";
 
 const PAGE_SIZE = 10;
@@ -207,7 +208,11 @@ export function PartnerListTab() {
   }, [filteredPartners, resolvedCurrentPage]);
 
   useEffect(() => {
-    setCurrentPage(1);
+    const timer = window.setTimeout(() => {
+      setCurrentPage(1);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [debouncedSearchQuery, gradeFilter, searchField, sortKey]);
 
   const handleNewPartnerFormChange = useCallback(
@@ -280,6 +285,9 @@ export function PartnerListTab() {
         lossCommissionRate: Number(newPartnerForm.lossCommissionRate || 0),
         commissionRate: Number(newPartnerForm.commissionRate || 0),
         feeCommissionRate: Number(newPartnerForm.feeCommissionRate || 0),
+        bankName: newPartnerForm.bankName,
+        bankAccount: newPartnerForm.bankAccount.trim() || undefined,
+        bankAccountHolder: newPartnerForm.bankAccountHolder.trim() || undefined,
       });
 
       if (!result?.success) {
@@ -299,6 +307,15 @@ export function PartnerListTab() {
       resetNewPartnerForm();
       setIsNewPartnerModalOpen(false);
       await refreshPartners();
+    } catch (error) {
+      addToast({
+        title: "파트너 등록 실패",
+        message:
+          error instanceof Error
+            ? error.message
+            : "신규 파트너를 등록하지 못했습니다.",
+        type: "error",
+      });
     } finally {
       setIsCreatingPartner(false);
     }
@@ -313,7 +330,11 @@ export function PartnerListTab() {
 
   useEffect(() => {
     if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
+      const timer = window.setTimeout(() => {
+        setCurrentPage(totalPages);
+      }, 0);
+
+      return () => window.clearTimeout(timer);
     }
   }, [currentPage, totalPages]);
 
@@ -683,12 +704,18 @@ export function PartnerListTab() {
                     <label className="block text-xs text-gray-300 mb-1">
                       출금 은행
                     </label>
-                    <AdminInput
+                    <AdminSelect
                       defaultValue={selectedPartner.bankName}
                       className="w-full"
                       id="edit-partner-bank-name"
-                      placeholder="예) 국민은행"
-                    />
+                    >
+                      <option value="">은행 선택</option>
+                      {BANK_OPTIONS.map((bank) => (
+                        <option key={bank} value={bank}>
+                          {bank}
+                        </option>
+                      ))}
+                    </AdminSelect>
                   </div>
                   <div>
                     <label className="block text-xs text-gray-300 mb-1">
@@ -1233,14 +1260,20 @@ export function PartnerListTab() {
                 <label className="block text-xs text-gray-300 mb-1">
                   출금 은행
                 </label>
-                <AdminInput
-                  placeholder="은행명"
+                <AdminSelect
                   className="w-full"
                   value={newPartnerForm.bankName}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
                     handleNewPartnerFormChange("bankName", e.target.value)
                   }
-                />
+                >
+                  <option value="">은행 선택</option>
+                  {BANK_OPTIONS.map((bank) => (
+                    <option key={bank} value={bank}>
+                      {bank}
+                    </option>
+                  ))}
+                </AdminSelect>
               </div>
               <div>
                 <label className="block text-xs text-gray-300 mb-1">

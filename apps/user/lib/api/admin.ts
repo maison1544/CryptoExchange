@@ -60,6 +60,46 @@ async function callAdminEdgeFunction(fnName: string, body: unknown) {
   return res.json();
 }
 
+async function createBackofficeAccountRequest(body: unknown) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session?.access_token) {
+    return { success: false, error: "No session" };
+  }
+
+  try {
+    const response = await fetch("/api/admin/backoffice/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: payload?.error || `Request failed (${response.status})`,
+      };
+    }
+
+    return payload ?? { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "계정 생성 요청 중 오류가 발생했습니다.",
+    };
+  }
+}
+
 export async function createBackofficeAccount(data: {
   accountType: "admin" | "agent";
   username: string;
@@ -73,8 +113,11 @@ export async function createBackofficeAccount(data: {
   feeCommissionRate?: number;
   role?: "super_admin" | "admin";
   referralCode?: string;
+  bankName?: string;
+  bankAccount?: string;
+  bankAccountHolder?: string;
 }) {
-  return callAdminEdgeFunction("admin-create-backoffice-account", data);
+  return createBackofficeAccountRequest(data);
 }
 
 export async function deleteBackofficeAccount(
