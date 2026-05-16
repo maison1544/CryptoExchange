@@ -2,14 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse, getBearer } from "../_shared/cors.ts";
 
-function randomSuffix(len = 4) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  const bytes = crypto.getRandomValues(new Uint8Array(len));
-  for (let i = 0; i < len; i++) out += chars[bytes[i] % chars.length];
-  return out;
-}
-
 function makeBackofficeEmail(username: string) {
   return `${
     username
@@ -24,12 +16,11 @@ function isValidEmail(email: string) {
 }
 
 function makeReferralCode(username: string) {
-  const prefix = username
+  return username
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "")
-    .slice(0, 14);
-  return `${prefix || "AG"}-${randomSuffix(4)}`.slice(0, 20);
+    .slice(0, 20);
 }
 
 Deno.serve(async (req: Request) => {
@@ -161,6 +152,29 @@ Deno.serve(async (req: Request) => {
     if (existingAgent)
       return jsonResponse({ error: "Account already exists" }, 409);
 
+    const finalCode = referralCode?.trim().toUpperCase() ||
+      makeReferralCode(username);
+
+    if (!finalCode) {
+      return jsonResponse(
+        { error: "가입코드를 생성할 수 없는 아이디입니다." },
+        400,
+      );
+    }
+
+    const { data: existingReferralCode } = await supabaseAdmin
+      .from("agents")
+      .select("id")
+      .eq("referral_code", finalCode)
+      .maybeSingle();
+
+    if (existingReferralCode) {
+      return jsonResponse(
+        { error: "이미 사용 중인 가입코드입니다. 다른 아이디를 입력해주세요." },
+        409,
+      );
+    }
+
     const { data: createdAuth, error: authCreateErr } =
       await supabaseAdmin.auth.admin.createUser({
         email: finalEmail,
@@ -169,26 +183,6 @@ Deno.serve(async (req: Request) => {
       });
     if (authCreateErr || !createdAuth.user)
       return jsonResponse({ error: authCreateErr?.message || "Failed" }, 400);
-
-    let finalCode = referralCode?.trim().toUpperCase() || null;
-    if (!finalCode) {
-      for (let i = 0; i < 20; i++) {
-        const candidate = makeReferralCode(username);
-        const { data: exists } = await supabaseAdmin
-          .from("agents")
-          .select("id")
-          .eq("referral_code", candidate)
-          .maybeSingle();
-        if (!exists) {
-          finalCode = candidate;
-          break;
-        }
-      }
-    }
-    if (!finalCode) {
-      await supabaseAdmin.auth.admin.deleteUser(createdAuth.user.id);
-      return jsonResponse({ error: "Failed to generate referral code" }, 500);
-    }
 
     const { error: insertErr } = await supabaseAdmin.from("agents").insert({
       id: createdAuth.user.id,

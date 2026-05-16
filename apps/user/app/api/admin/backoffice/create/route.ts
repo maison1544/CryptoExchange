@@ -20,14 +20,6 @@ type BackofficeCreateBody = {
   bankAccountHolder?: string;
 };
 
-function randomSuffix(len = 4) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  const bytes = crypto.getRandomValues(new Uint8Array(len));
-  for (let i = 0; i < len; i++) out += chars[bytes[i] % chars.length];
-  return out;
-}
-
 function makeBackofficeEmail(username: string) {
   return `${
     username
@@ -42,12 +34,11 @@ function isValidEmail(email: string) {
 }
 
 function makeReferralCode(username: string) {
-  const prefix = username
+  return username
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "")
-    .slice(0, 14);
-  return `${prefix || "AG"}-${randomSuffix(4)}`.slice(0, 20);
+    .slice(0, 20);
 }
 
 function getBearer(req: NextRequest) {
@@ -221,6 +212,29 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const finalCode =
+    body?.referralCode?.trim().toUpperCase() || makeReferralCode(username);
+
+  if (!finalCode) {
+    return NextResponse.json(
+      { error: "가입코드를 생성할 수 없는 아이디입니다." },
+      { status: 400 },
+    );
+  }
+
+  const { data: existingReferralCode } = await admin
+    .from("agents")
+    .select("id")
+    .eq("referral_code", finalCode)
+    .maybeSingle();
+
+  if (existingReferralCode) {
+    return NextResponse.json(
+      { error: "이미 사용 중인 가입코드입니다. 다른 아이디를 입력해주세요." },
+      { status: 409 },
+    );
+  }
+
   const { data: createdAuth, error: authCreateErr } =
     await admin.auth.admin.createUser({
       email: finalEmail,
@@ -232,32 +246,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: authCreateErr?.message || "Failed" },
       { status: 400 },
-    );
-  }
-
-  let finalCode = body?.referralCode?.trim().toUpperCase() || null;
-
-  if (!finalCode) {
-    for (let i = 0; i < 20; i++) {
-      const candidate = makeReferralCode(username);
-      const { data: exists } = await admin
-        .from("agents")
-        .select("id")
-        .eq("referral_code", candidate)
-        .maybeSingle();
-
-      if (!exists) {
-        finalCode = candidate;
-        break;
-      }
-    }
-  }
-
-  if (!finalCode) {
-    await admin.auth.admin.deleteUser(createdAuth.user.id);
-    return NextResponse.json(
-      { error: "Failed to generate referral code" },
-      { status: 500 },
     );
   }
 
