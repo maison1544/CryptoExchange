@@ -1,15 +1,14 @@
 "use client";
 
 import { AppLayout } from "@/components/layout/AppLayout";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { DbUserProfile } from "@/lib/types/database";
+import type { DbFuturesPosition, DbUserProfile } from "@/lib/types/database";
 import {
   TrendingUp,
   Calendar,
   Mail,
   Building2,
-  Edit3,
   Copy,
   Lock,
 } from "lucide-react";
@@ -21,26 +20,18 @@ import { formatDisplayNumber, formatUsdt } from "@/lib/utils/numberFormat";
 
 const supabase = createClient();
 
-const kycConfig = {
-  0: {
-    label: "미인증",
-    color: "text-gray-400",
-    bg: "bg-gray-800",
-    desc: "KYC 미인증 상태",
-  },
-  1: {
-    label: "기본 인증",
-    color: "text-yellow-400",
-    bg: "bg-yellow-500/10",
-    desc: "이메일 인증 완료",
-  },
-  2: {
-    label: "완전 인증",
-    color: "text-green-400",
-    bg: "bg-green-500/10",
-    desc: "신분증 인증 완료",
-  },
-};
+type ProfileTradeRow = Pick<
+  DbFuturesPosition,
+  | "id"
+  | "symbol"
+  | "leverage"
+  | "size"
+  | "entry_price"
+  | "pnl"
+  | "fee"
+  | "closed_at"
+  | "status"
+>;
 
 function formatProfilePercent(value: number) {
   return `${formatDisplayNumber(value, {
@@ -64,68 +55,141 @@ function formatVolumeInMillions(value: number) {
   })}M`;
 }
 
+function formatPair(symbol: string) {
+  return symbol.endsWith("USDT")
+    ? `${symbol.slice(0, -"USDT".length)}/USDT`
+    : symbol;
+}
+
 export default function ProfilePage() {
   const { isLoggedIn, user } = useAuth();
   const { userPoints } = useDepositWithdrawal();
   const { addToast } = useNotification();
   const [currentTime] = useState(() => Date.now());
   const [profile, setProfile] = useState<DbUserProfile | null>(null);
+  const [trades, setTrades] = useState<ProfileTradeRow[]>([]);
 
   useEffect(() => {
     if (!user) return;
-    supabase
-      .from("user_profiles")
-      .select("*")
-      .eq("id", user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setProfile(data as DbUserProfile);
-      });
+
+    let isCurrent = true;
+
+    Promise.all([
+      supabase.from("user_profiles").select("*").eq("id", user.id).maybeSingle(),
+      supabase
+        .from("futures_positions")
+        .select(
+          "id, symbol, leverage, size, entry_price, pnl, fee, closed_at, status",
+        )
+        .eq("user_id", user.id)
+        .in("status", ["closed", "liquidated"])
+        .order("closed_at", { ascending: true }),
+    ]).then(([profileResult, tradesResult]) => {
+      if (!isCurrent) return;
+      setProfile((profileResult.data as DbUserProfile | null) ?? null);
+      setTrades((tradesResult.data as ProfileTradeRow[] | null) ?? []);
+    });
+
+    return () => {
+      isCurrent = false;
+    };
   }, [user]);
 
-  const mockProfile = profile
+  const currentProfile = profile?.id === user?.id ? profile : null;
+  const currentTrades = useMemo(
+    () => (profile?.id === user?.id ? trades : []),
+    [profile?.id, trades, user?.id],
+  );
+
+  const profileInfo = currentProfile
     ? {
-        displayName: profile.name,
-        email: profile.email,
-        phone: profile.phone.replace(/(\d{3})\d{4}(\d{4})/, "$1-****-$2"),
-        joinDate: new Date(profile.created_at).toISOString().split("T")[0],
-        kycLevel: 2 as 0 | 1 | 2,
-        referralCode: profile.referral_code_used || "N/A",
-        bank: profile.bank_name || "-",
-        account: profile.bank_account || "-",
-        holder: profile.bank_account_holder || "-",
+        displayName: currentProfile.name,
+        email: currentProfile.email,
+        joinDate: new Date(currentProfile.created_at).toISOString().split("T")[0],
+        referralCode: currentProfile.referral_code_used || "-",
+        bank: currentProfile.bank_name || "-",
+        account: currentProfile.bank_account || "-",
+        holder: currentProfile.bank_account_holder || "-",
       }
     : {
         displayName: "Loading...",
         email: "",
-        phone: "",
         joinDate: "",
-        kycLevel: 0 as 0 | 1 | 2,
-        referralCode: "",
+        referralCode: "-",
         bank: "-",
         account: "-",
         holder: "-",
       };
 
-  const joinDays = profile
+  const joinDays = currentProfile
     ? Math.floor(
-        (currentTime - new Date(profile.created_at).getTime()) / 86400000,
+        (currentTime - new Date(currentProfile.created_at).getTime()) / 86400000,
       )
     : 0;
-  const mockStats = {
-    totalTrades: 0,
-    winRate: 0,
-    totalPnl: 0,
-    avgLeverage: 0,
-    favorPair: "BTC/USDT",
-    longestWinStreak: 0,
-    maxDayPnl: 0,
-    maxDayLoss: 0,
-    totalVolume: 0,
-    joinDays,
-  };
+  const tradeStats = useMemo(() => {
+    const totalTrades = currentTrades.length;
+    const totalPnl = currentTrades.reduce(
+      (sum, trade) => sum + Number(trade.pnl || 0),
+      0,
+    );
+    const wins = currentTrades.filter(
+      (trade) => Number(trade.pnl || 0) > 0,
+    ).length;
+    const totalVolume = currentTrades.reduce(
+      (sum, trade) =>
+        sum + Number(trade.size || 0) * Number(trade.entry_price || 0),
+      0,
+    );
+    const avgLeverage =
+      totalTrades > 0
+        ? currentTrades.reduce(
+            (sum, trade) => sum + Number(trade.leverage || 0),
+            0,
+          ) /
+          totalTrades
+        : 0;
+    const symbolCounts = currentTrades.reduce<Record<string, number>>(
+      (acc, trade) => {
+        acc[trade.symbol] = (acc[trade.symbol] || 0) + 1;
+        return acc;
+      },
+      {},
+    );
+    const favorSymbol =
+      Object.entries(symbolCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
+    let currentWinStreak = 0;
+    let longestWinStreak = 0;
+    const dailyPnl = currentTrades.reduce<Record<string, number>>((acc, trade) => {
+      if (!trade.closed_at) return acc;
+      const day = new Date(trade.closed_at).toISOString().split("T")[0];
+      acc[day] = (acc[day] || 0) + Number(trade.pnl || 0);
+      return acc;
+    }, {});
 
-  const kyc = kycConfig[mockProfile.kycLevel];
+    for (const trade of currentTrades) {
+      if (Number(trade.pnl || 0) > 0) {
+        currentWinStreak += 1;
+        longestWinStreak = Math.max(longestWinStreak, currentWinStreak);
+      } else {
+        currentWinStreak = 0;
+      }
+    }
+
+    const dailyValues = Object.values(dailyPnl);
+
+    return {
+      totalTrades,
+      winRate: totalTrades > 0 ? (wins / totalTrades) * 100 : 0,
+      totalPnl,
+      avgLeverage,
+      favorPair: favorSymbol === "-" ? "-" : formatPair(favorSymbol),
+      longestWinStreak,
+      maxDayPnl: dailyValues.length > 0 ? Math.max(...dailyValues, 0) : 0,
+      maxDayLoss: dailyValues.length > 0 ? Math.min(...dailyValues, 0) : 0,
+      totalVolume,
+      joinDays,
+    };
+  }, [currentTrades, joinDays]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -162,42 +226,20 @@ export default function ProfilePage() {
 
           {/* Profile Header */}
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-linear-to-br from-yellow-500 to-yellow-700 flex items-center justify-center text-2xl font-bold text-black">
-                  {mockProfile.displayName.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-xl font-bold text-white">
-                      {mockProfile.displayName}
-                    </h1>
-                    <span
-                      className={cn(
-                        "text-[10px] px-2 py-0.5 rounded-full font-medium",
-                        kyc.bg,
-                        kyc.color,
-                      )}
-                    >
-                      {kyc.label}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4 mt-1.5 text-xs text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <Mail size={12} />
-                      {mockProfile.email}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Calendar size={12} />
-                      가입일 {mockProfile.joinDate}
-                    </span>
-                  </div>
-                </div>
+            <div>
+              <h1 className="text-xl font-bold text-white">
+                {profileInfo.displayName}
+              </h1>
+              <div className="flex flex-wrap items-center gap-4 mt-1.5 text-xs text-gray-500">
+                <span className="flex items-center gap-1">
+                  <Mail size={12} />
+                  {profileInfo.email}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Calendar size={12} />
+                  가입일 {profileInfo.joinDate}
+                </span>
               </div>
-              <button className="flex items-center gap-1.5 px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg transition-colors">
-                <Edit3 size={12} />
-                프로필 수정
-              </button>
             </div>
 
             {/* Quick Stats */}
@@ -211,7 +253,7 @@ export default function ProfilePage() {
               <div className="text-center p-3 bg-gray-800/50 rounded-lg">
                 <div className="text-xs text-gray-500 mb-1">총 거래</div>
                 <div className="text-lg font-bold text-white">
-                  {formatDisplayNumber(mockStats.totalTrades, {
+                  {formatDisplayNumber(tradeStats.totalTrades, {
                     maximumFractionDigits: 0,
                   })}
                   건
@@ -220,7 +262,7 @@ export default function ProfilePage() {
               <div className="text-center p-3 bg-gray-800/50 rounded-lg">
                 <div className="text-xs text-gray-500 mb-1">승률</div>
                 <div className="text-lg font-bold text-white">
-                  {formatProfilePercent(mockStats.winRate)}
+                  {formatProfilePercent(tradeStats.winRate)}
                 </div>
               </div>
               <div className="text-center p-3 bg-gray-800/50 rounded-lg">
@@ -228,16 +270,16 @@ export default function ProfilePage() {
                 <div
                   className={cn(
                     "text-lg font-bold",
-                    mockStats.totalPnl >= 0 ? "text-green-400" : "text-red-400",
+                    tradeStats.totalPnl >= 0 ? "text-green-400" : "text-red-400",
                   )}
                 >
-                  {formatProfileUsdt(mockStats.totalPnl, true)}
+                  {formatProfileUsdt(tradeStats.totalPnl, true)}
                 </div>
               </div>
               <div className="text-center p-3 bg-gray-800/50 rounded-lg">
                 <div className="text-xs text-gray-500 mb-1">활동일수</div>
                 <div className="text-lg font-bold text-white">
-                  {formatDisplayNumber(mockStats.joinDays, {
+                  {formatDisplayNumber(tradeStats.joinDays, {
                     maximumFractionDigits: 0,
                   })}
                   일
@@ -258,29 +300,29 @@ export default function ProfilePage() {
                 {[
                   {
                     label: "총 거래량",
-                    value: formatVolumeInMillions(mockStats.totalVolume),
+                    value: formatVolumeInMillions(tradeStats.totalVolume),
                   },
                   {
                     label: "평균 레버리지",
-                    value: `${formatDisplayNumber(mockStats.avgLeverage, {
+                    value: `${formatDisplayNumber(tradeStats.avgLeverage, {
                       maximumFractionDigits: 0,
                     })}x`,
                   },
-                  { label: "주요 거래 페어", value: mockStats.favorPair },
+                  { label: "주요 거래 페어", value: tradeStats.favorPair },
                   {
                     label: "최대 연승",
-                    value: `${formatDisplayNumber(mockStats.longestWinStreak, {
+                    value: `${formatDisplayNumber(tradeStats.longestWinStreak, {
                       maximumFractionDigits: 0,
                     })}연승`,
                   },
                   {
                     label: "일일 최대 수익",
-                    value: formatProfileUsdt(mockStats.maxDayPnl, true),
+                    value: formatProfileUsdt(tradeStats.maxDayPnl, true),
                     color: "text-green-400",
                   },
                   {
                     label: "일일 최대 손실",
-                    value: formatProfileUsdt(mockStats.maxDayLoss),
+                    value: formatProfileUsdt(tradeStats.maxDayLoss),
                     color: "text-red-400",
                   },
                 ].map((item, i) => (
@@ -312,15 +354,15 @@ export default function ProfilePage() {
                 <div className="space-y-3">
                   <div className="flex justify-between py-2 border-b border-gray-800/50">
                     <span className="text-gray-400">은행</span>
-                    <span className="text-white">{mockProfile.bank}</span>
+                    <span className="text-white">{profileInfo.bank}</span>
                   </div>
                   <div className="flex justify-between py-2 border-b border-gray-800/50">
                     <span className="text-gray-400">계좌번호</span>
-                    <span className="text-white">{mockProfile.account}</span>
+                    <span className="text-white">{profileInfo.account}</span>
                   </div>
                   <div className="flex justify-between py-2">
                     <span className="text-gray-400">예금주</span>
-                    <span className="text-white">{mockProfile.holder}</span>
+                    <span className="text-white">{profileInfo.holder}</span>
                   </div>
                 </div>
               </div>
@@ -329,18 +371,15 @@ export default function ProfilePage() {
                 <h3 className="text-white font-medium mb-3">추천인 코드</h3>
                 <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-4 py-3">
                   <span className="text-yellow-500 font-mono font-bold flex-1">
-                    {mockProfile.referralCode}
+                    {profileInfo.referralCode}
                   </span>
                   <button
-                    onClick={() => handleCopy(mockProfile.referralCode)}
+                    onClick={() => handleCopy(profileInfo.referralCode)}
                     className="text-gray-400 hover:text-white transition-colors"
                   >
                     <Copy size={16} />
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  친구를 초대하면 거래 수수료의 20%를 리워드로 받습니다.
-                </p>
               </div>
             </div>
           </div>

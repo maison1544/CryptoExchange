@@ -147,7 +147,7 @@ function LegacyPartnerPage() {
   });
   const [partnerMembers, setPartnerMembers] = useState<PartnerMemberRow[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
-  const [mockCommissionHistory, setCommissionHistory] = useState<
+  const [commissionHistory, setCommissionHistory] = useState<
     CommissionHistoryItem[]
   >([]);
   const [agentWithdrawals, setAgentWithdrawals] = useState<
@@ -269,7 +269,7 @@ function LegacyPartnerPage() {
     void load();
   }, [user, loadWithdrawals]);
 
-  const filteredCommissions = mockCommissionHistory.filter((c) => {
+  const filteredCommissions = commissionHistory.filter((c) => {
     if (commissionFilter !== "all" && c.type !== commissionFilter) return false;
     if (commStartDate && c.date.split(" ")[0] < commStartDate) return false;
     if (commEndDate && c.date.split(" ")[0] > commEndDate) return false;
@@ -278,9 +278,9 @@ function LegacyPartnerPage() {
   const commissionFilters = useMemo(
     () => [
       "all",
-      ...Array.from(new Set(mockCommissionHistory.map((c) => c.type))),
+      ...Array.from(new Set(commissionHistory.map((c) => c.type))),
     ],
-    [mockCommissionHistory],
+    [commissionHistory],
   );
   const filteredWithdrawals = useMemo(() => {
     return agentWithdrawals.filter((row) => {
@@ -472,7 +472,7 @@ function LegacyPartnerPage() {
               contentClassName="px-0 py-0"
             >
               <div className="divide-y divide-gray-800/50">
-                {mockCommissionHistory.slice(0, 3).map((c) => (
+                {commissionHistory.slice(0, 3).map((c) => (
                   <div
                     key={c.id}
                     className="px-4 py-3 flex items-center justify-between"

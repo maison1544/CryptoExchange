@@ -88,7 +88,7 @@ export default function AssetsPage() {
   const [transferFrom, setTransferFrom] = useState<WalletType>("general");
   const [transferTo, setTransferTo] = useState<WalletType>("futures");
   const [transferAmount, setTransferAmount] = useState("");
-  const [MOCK_WALLETS, setWallets] = useState(DEFAULT_WALLETS);
+  const [wallets, setWallets] = useState(DEFAULT_WALLETS);
   const [dailyPnl, setDailyPnl] = useState(0);
   const [weeklyPnl, setWeeklyPnl] = useState(0);
 
@@ -210,9 +210,7 @@ export default function AssetsPage() {
   }, [user, loadWallets]);
 
   const total =
-    MOCK_WALLETS.general.total +
-    MOCK_WALLETS.futures.total +
-    MOCK_WALLETS.staking.total;
+    wallets.general.total + wallets.futures.total + wallets.staking.total;
 
   return (
     <AppLayout>
@@ -342,7 +340,7 @@ export default function AssetsPage() {
                     <div className="text-xl font-bold text-white mb-1">
                       {bal(
                         showBalance,
-                        formatUsdtValue(MOCK_WALLETS[w.key].total),
+                        formatUsdtValue(wallets[w.key].total),
                       )}{" "}
                       <span className="text-sm text-gray-500 font-normal">
                         USDT
@@ -353,7 +351,7 @@ export default function AssetsPage() {
                       {bal(
                         showBalance,
                         formatApproxKrwFromUsdt(
-                          MOCK_WALLETS[w.key].total,
+                          wallets[w.key].total,
                           usdtKrwRate,
                         ),
                       )}
@@ -365,14 +363,14 @@ export default function AssetsPage() {
                           <div className="text-green-400">
                             {bal(
                               showBalance,
-                              `${formatUsdtValue(MOCK_WALLETS[w.key].available)} USDT`,
+                              `${formatUsdtValue(wallets[w.key].available)} USDT`,
                             )}
                           </div>
                           <div className="text-gray-500">
                             {bal(
                               showBalance,
                               formatApproxKrwFromUsdt(
-                                MOCK_WALLETS[w.key].available,
+                                wallets[w.key].available,
                                 usdtKrwRate,
                               ),
                             )}
@@ -387,14 +385,14 @@ export default function AssetsPage() {
                               <div className="text-yellow-400">
                                 {bal(
                                   showBalance,
-                                  `${formatUsdtValue(MOCK_WALLETS.futures.crossCollateral)} USDT`,
+                                  `${formatUsdtValue(wallets.futures.crossCollateral)} USDT`,
                                 )}
                               </div>
                               <div className="text-gray-500">
                                 {bal(
                                   showBalance,
                                   formatApproxKrwFromUsdt(
-                                    MOCK_WALLETS.futures.crossCollateral,
+                                    wallets.futures.crossCollateral,
                                     usdtKrwRate,
                                   ),
                                 )}
@@ -407,14 +405,14 @@ export default function AssetsPage() {
                               <div className="text-orange-400">
                                 {bal(
                                   showBalance,
-                                  `${formatUsdtValue(MOCK_WALLETS.futures.isolatedCollateral)} USDT`,
+                                  `${formatUsdtValue(wallets.futures.isolatedCollateral)} USDT`,
                                 )}
                               </div>
                               <div className="text-gray-500">
                                 {bal(
                                   showBalance,
                                   formatApproxKrwFromUsdt(
-                                    MOCK_WALLETS.futures.isolatedCollateral,
+                                    wallets.futures.isolatedCollateral,
                                     usdtKrwRate,
                                   ),
                                 )}
@@ -429,14 +427,14 @@ export default function AssetsPage() {
                               <div className="text-blue-400">
                                 {bal(
                                   showBalance,
-                                  `${formatUsdtValue(MOCK_WALLETS.futures.reservedOrders)} USDT`,
+                                  `${formatUsdtValue(wallets.futures.reservedOrders)} USDT`,
                                 )}
                               </div>
                               <div className="text-gray-500">
                                 {bal(
                                   showBalance,
                                   formatApproxKrwFromUsdt(
-                                    MOCK_WALLETS.futures.reservedOrders,
+                                    wallets.futures.reservedOrders,
                                     usdtKrwRate,
                                   ),
                                 )}
@@ -452,14 +450,14 @@ export default function AssetsPage() {
                             <div className="text-blue-400">
                               {bal(
                                 showBalance,
-                                `${formatUsdtValue(MOCK_WALLETS.staking.locked)} USDT`,
+                                `${formatUsdtValue(wallets.staking.locked)} USDT`,
                               )}
                             </div>
                             <div className="text-gray-500">
                               {bal(
                                 showBalance,
                                 formatApproxKrwFromUsdt(
-                                  MOCK_WALLETS.staking.locked,
+                                  wallets.staking.locked,
                                   usdtKrwRate,
                                 ),
                               )}
@@ -468,21 +466,21 @@ export default function AssetsPage() {
                         </div>
                       )}
                       {w.key === "general" &&
-                        MOCK_WALLETS.general.locked > 0 && (
+                        wallets.general.locked > 0 && (
                           <div className="flex justify-between">
                             <span className="text-gray-500">잠금</span>
                             <div className="text-right">
                               <div className="text-gray-400">
                                 {bal(
                                   showBalance,
-                                  `${formatUsdtValue(MOCK_WALLETS.general.locked)} USDT`,
+                                  `${formatUsdtValue(wallets.general.locked)} USDT`,
                                 )}
                               </div>
                               <div className="text-gray-500">
                                 {bal(
                                   showBalance,
                                   formatApproxKrwFromUsdt(
-                                    MOCK_WALLETS.general.locked,
+                                    wallets.general.locked,
                                     usdtKrwRate,
                                   ),
                                 )}
@@ -515,17 +513,17 @@ export default function AssetsPage() {
                   {[
                     {
                       label: "일반 잔고",
-                      val: MOCK_WALLETS.general.total,
+                      val: wallets.general.total,
                       color: "text-emerald-400",
                     },
                     {
                       label: "선물 잔고 (증거금)",
-                      val: MOCK_WALLETS.futures.total,
+                      val: wallets.futures.total,
                       color: "text-yellow-400",
                     },
                     {
                       label: "스테이킹 잔고",
-                      val: MOCK_WALLETS.staking.total,
+                      val: wallets.staking.total,
                       color: "text-blue-400",
                     },
                   ].map((r) => (
@@ -698,12 +696,12 @@ export default function AssetsPage() {
               <div className="flex justify-between mt-1">
                 <span className="text-[10px] text-gray-500">
                   사용 가능:{" "}
-                  {formatUsdtValue(MOCK_WALLETS[transferFrom].available)} USDT
+                  {formatUsdtValue(wallets[transferFrom].available)} USDT
                 </span>
                 <button
                   onClick={() =>
                     setTransferAmount(
-                      String(MOCK_WALLETS[transferFrom].available),
+                      String(wallets[transferFrom].available),
                     )
                   }
                   className="text-[10px] text-yellow-500 hover:text-yellow-400"
